@@ -63,6 +63,7 @@ impl TurboComposer {
         let a_bits: Vec<_> = a_bit_iter.skip(256 - num_bits).collect();
         let b_bit_iter = BitIterator8::new(self.witnesses[&b].to_bytes());
         let b_bits: Vec<_> = b_bit_iter.skip(256 - num_bits).collect();
+        // panic!("a bits: {:?}\nb bits: {:?}", a_bits, b_bits);
 
         assert!(a_bits.len() >= num_bits);
         assert!(b_bits.len() >= num_bits);
@@ -88,12 +89,10 @@ impl TurboComposer {
         // Now we can add the first row as: `| 0 | 0 | -- | 0 |`.
         // Note that c_i will be set on the first loop iteration.
         self.perm
-            .add_variable_to_map(Self::constant_zero(), WireData::Left(self.n));
-        self.perm.add_variable_to_map(
-            Self::constant_zero(),
-            WireData::Right(self.n),
-        );
-        self.perm.add_variable_to_map(
+            .add_witness_to_map(Self::constant_zero(), WireData::Left(self.n));
+        self.perm
+            .add_witness_to_map(Self::constant_zero(), WireData::Right(self.n));
+        self.perm.add_witness_to_map(
             Self::constant_zero(),
             WireData::Fourth(self.n),
         );
@@ -184,13 +183,12 @@ impl TurboComposer {
             // right (`b_i`) and fourth (`d_i`) witnesses to the
             // actual gate, meanwhile we set out (`w_i`) to the
             // previous gate.
-            self.perm.add_variable_to_map(wit_a, WireData::Left(self.n));
+            self.perm.add_witness_to_map(wit_a, WireData::Left(self.n));
+            self.perm.add_witness_to_map(wit_b, WireData::Right(self.n));
             self.perm
-                .add_variable_to_map(wit_b, WireData::Right(self.n));
+                .add_witness_to_map(wit_d, WireData::Fourth(self.n));
             self.perm
-                .add_variable_to_map(wit_d, WireData::Fourth(self.n));
-            self.perm
-                .add_variable_to_map(wit_c, WireData::Output(self.n - 1));
+                .add_witness_to_map(wit_c, WireData::Output(self.n - 1));
             // Push the witnesses to it's actual wire vector storage
             self.a_w.push(wit_a);
             self.b_w.push(wit_b);
@@ -205,7 +203,7 @@ impl TurboComposer {
         // ahead. To fix this, we simply pad with a 0 so the last row of
         // the program memory will look like this:
         // | an  | bn  | 0   | dn  |
-        self.perm.add_variable_to_map(
+        self.perm.add_witness_to_map(
             Self::constant_zero(),
             WireData::Output(self.n - 1),
         );
