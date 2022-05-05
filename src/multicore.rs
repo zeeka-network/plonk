@@ -66,7 +66,7 @@ impl Workers {
 
         crossbeam::scope(|scope| {
             f(scope, chunk_size)
-        }).expect("must run")
+        }).expect("underlying must run. ")
     }
 
     pub fn get_chunk_size(

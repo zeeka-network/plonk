@@ -9,6 +9,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use dusk_plonk::prelude::*;
 use rand_core::OsRng;
+use core::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
 struct BenchCircuit {
@@ -133,7 +134,7 @@ fn constraint_system_benchmark(c: &mut Criterion) {
 
 criterion_group! {
     name = plonk;
-    config = Criterion::default().sample_size(10).measurement_time(Duration::from_secs(1000));
+    config = Criterion::default().sample_size(10).measurement_time(Duration::from_secs(100));
     targets = constraint_system_benchmark
 }
 criterion_main!(plonk);
