@@ -73,11 +73,13 @@ if #[cfg(feature = "alloc")] {
 
 mod fft;
 mod transcript;
+mod multicore;
 
 pub mod commitment_scheme;
 pub mod error;
 pub mod prelude;
 pub mod proof_system;
+
 
 #[doc = include_str!("../docs/notes-intro.md")]
 pub mod notes {
