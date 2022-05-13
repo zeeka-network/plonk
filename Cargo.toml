@@ -1,7 +1,7 @@
 [package]
 name = "dusk-plonk"
 version = "0.10.0"
-categories =["algorithms", "cryptography", "science", "mathematics"]
+categories = ["algorithms", "cryptography", "science", "mathematics"]
 edition = "2021"
 keywords = ["cryptography", "plonk", "zk-snarks", "zero-knowledge", "crypto"]
 license = "MPL-2.0"
@@ -17,36 +17,52 @@ exclude = [
 ]
 
 [dependencies]
+thiserror = "1.0"
+log = "0.4"
 lazy_static = "1.4.0"
-merlin = {version = "3.0", default-features = false}
-rand_core = {version="0.6", default-features=false}
+merlin = { version = "3.0", default-features = false }
+rand_core = { version = "0.6", default-features = false }
 dusk-bytes = "0.1"
-dusk-bls12_381 = {version = "0.9", default-features = false, features = ["groups", "pairings", "endo"]}
-dusk-jubjub = {version = "0.11", default-features = false}
-itertools = {version = "0.9", default-features = false}
-hashbrown = {version = "0.9", default-features=false, features = ["ahash"]}
-rayon = {version = "1.5", optional = true}
-num_cpus = {version = "1", optional = true}
-futures = {version = "0.3", default_features = false, features = ["executor"]}
-crossbeam = {version = "0.7", optional = true}
+dusk-jubjub = { git = "https://github.com/zeeka-network/jubjub.git", rev = "bb6a807", default-features = false }
+itertools = { version = "0.9", default-features = false }
+hashbrown = { version = "0.9", default-features = false, features = ["ahash"] }
+rayon = { version = "1.5", optional = true }
+num_cpus = { version = "1", optional = true }
+futures = { version = "0.3", default_features = false, features = ["executor"] }
+crossbeam = { version = "0.7", optional = true }
 cfg-if = "1.0"
 # Dusk related deps for WASMI serde
-canonical = {version = "0.7", optional = true}
-canonical_derive = {version = "0.7", optional = true}
+canonical = { version = "0.7", optional = true }
+canonical_derive = { version = "0.7", optional = true }
+
+rust-gpu-tools = { git = "https://github.com/zeeka-network/rust-gpu-tools.git", rev = "6f74077", optional = true }
+dusk-bls12_381 = { git = "https://github.com/zeeka-network/bls12_381.git", rev = "0ed108b", default-features = false, features = ["groups", "pairings", "endo"] }
+ec-gpu-gen = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", optional = true }
+fs2 = { version = "0.4", optional = true }
 
 [dev-dependencies]
 criterion = "0.3"
 tempdir = "0.3"
+rand = "0.8"
+rand_core = "0.6.3"
+
+[build-dependencies]
+dusk-bls12_381 = { git = "https://github.com/zeeka-network/bls12_381.git", rev = "0ed108b", default-features = false, features = ["groups", "pairings", "endo"] }
+execute = "0.2.9"
+ec-gpu = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", optional = true }
+ec-gpu-gen = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", optional = true }
+hex = "0.4"
+sha2 = "0.9"
 
 [[bench]]
 name = "plonk"
 harness = false
 
 [features]
-default = ["std", "multi-core"]
+default = ["std", "multi-core", "gpu"]
 std = [
     "rand_core/std",
-    "dusk-bls12_381/default",  # Includes `parallel`
+    "dusk-bls12_381/default", # Includes `parallel`
     "dusk-jubjub/default",
     "itertools/default",
     "hashbrown/default",
@@ -57,7 +73,10 @@ alloc = ["dusk-bls12_381/alloc"]
 trace = []
 trace-print = ["trace"]
 canon = ["dusk-bls12_381/canon", "dusk-jubjub/canon", "canonical", "canonical_derive"]
-multi-core = ["rayon", "num_cpus", "futures/thread-pool", "crossbeam"]
+multi-core = ["rayon", "num_cpus", "futures/thread-pool", "crossbeam", "dusk-bls12_381/parallel"]
+gpu = ["rust-gpu-tools", "cuda", "fs2", "dusk-bls12_381/gpu"]
+cuda = ["rust-gpu-tools/cuda", "ec-gpu-gen/cuda"]
+opencl = ["rust-gpu-tools/opencl", "ec-gpu-gen/opencl"]
 
 [profile.release]
 panic = "abort"

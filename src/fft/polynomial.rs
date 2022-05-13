@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 use core::ops::{Add, AddAssign, Deref, DerefMut, Mul, Neg, Sub, SubAssign};
 use dusk_bls12_381::BlsScalar;
 use dusk_bytes::{DeserializableSlice, Serializable};
+use crate::multicore::{Workers, WORKERS};
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 /// Represents a polynomial in coeffiient form.
@@ -349,6 +350,14 @@ impl<'a, 'b> Mul<&'a Polynomial> for &'b Polynomial {
             self_evals.interpolate()
         }
     }
+}
+
+#[cfg(feature = "multi-core")]
+fn parallel_poly_mul_assign(lhs: &Polynomial, rhs: &Polynomial) {
+    let workers = WORKERS.as_ref();
+    workers.map(|worker| {
+
+    });
 }
 
 impl<'a, 'b> Mul<&'a BlsScalar> for &'b Polynomial {

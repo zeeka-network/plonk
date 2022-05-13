@@ -14,13 +14,8 @@
 
 use dusk_bls12_381::BlsScalar;
 use dusk_bytes::{DeserializableSlice, Serializable};
-use lazy_static::lazy_static;
 
-use crate::multicore::Workers;
-
-lazy_static! {
-    static ref WORKERS: Option<Workers> = Some(Workers::new());
-}
+use crate::multicore::WORKERS;
 
 /// Defines a domain over which finite field (I)FFTs can be performed. Works
 /// only for fields that have a large multiplicative subgroup of size that is
@@ -44,7 +39,7 @@ pub(crate) struct EvaluationDomain {
 }
 
 impl Serializable<{ u64::SIZE + u32::SIZE + 5 * BlsScalar::SIZE }>
-for EvaluationDomain
+    for EvaluationDomain
 {
     type Error = dusk_bytes::Error;
 
@@ -102,7 +97,8 @@ pub(crate) mod alloc {
 
     use crate::error::Error;
     use crate::fft::Evaluations;
-    use crate::multicore::Workers;
+    use crate::gpu;
+    use crate::multicore::{Workers, WORKERS};
 
     use super::*;
 
@@ -157,7 +153,13 @@ pub(crate) mod alloc {
         /// Compute a FFT, modifying the vector in place.
         fn fft_in_place(&self, coeffs: &mut Vec<BlsScalar>) {
             coeffs.resize(self.size(), BlsScalar::zero());
-            best_fft(coeffs, self.group_gen, self.log_size_of_group, WORKERS.as_ref(), None)
+            best_fft(
+                coeffs,
+                self.group_gen,
+                self.log_size_of_group,
+                WORKERS.as_ref(),
+                None,
+            )
         }
 
         /// Compute an IFFT.
@@ -171,7 +173,13 @@ pub(crate) mod alloc {
         #[inline]
         pub(crate) fn ifft_in_place(&self, evals: &mut Vec<BlsScalar>) {
             evals.resize(self.size(), BlsScalar::zero());
-            best_fft(evals, self.group_gen_inv, self.log_size_of_group, WORKERS.as_ref(), None);
+            best_fft(
+                evals,
+                self.group_gen_inv,
+                self.log_size_of_group,
+                WORKERS.as_ref(),
+                None,
+            );
 
             #[cfg(not(feature = "std"))]
             evals.iter_mut().for_each(|val| *val *= &self.size_inv);
@@ -180,7 +188,11 @@ pub(crate) mod alloc {
             evals.par_iter_mut().for_each(|val| *val *= &self.size_inv);
         }
 
-        fn distribute_powers(coeffs: &mut [BlsScalar], g: BlsScalar, workers: Option<&Workers>) {
+        fn distribute_powers(
+            coeffs: &mut [BlsScalar],
+            g: BlsScalar,
+            workers: Option<&Workers>,
+        ) {
             #[cfg(not(feature = "multi-core"))]
             {
                 let mut pow = BlsScalar::one();
@@ -213,6 +225,15 @@ pub(crate) mod alloc {
             coeffs
         }
 
+        pub(crate) fn many_coset_fft(
+            &self,
+            coeffs: &[&[BlsScalar]],
+            evas: &mut [Evaluations],
+            kern: &mut Option<gpu::LockedFFTKernel>,
+        ) {
+
+        }
+
         /// Compute a FFT over a coset of the domain, modifying the input vector
         /// in place.
         fn coset_fft_in_place(&self, coeffs: &mut Vec<BlsScalar>) {
@@ -231,7 +252,11 @@ pub(crate) mod alloc {
         /// vector in place.
         fn coset_ifft_in_place(&self, evals: &mut Vec<BlsScalar>) {
             self.ifft_in_place(evals);
-            Self::distribute_powers(evals, self.generator_inv, WORKERS.as_ref());
+            Self::distribute_powers(
+                evals,
+                self.generator_inv,
+                WORKERS.as_ref(),
+            );
         }
 
         #[allow(clippy::needless_range_loop)]
@@ -309,11 +334,11 @@ pub(crate) mod alloc {
                 .map(|i| {
                     (coset_gen
                         * self.group_gen.pow(&[
-                        poly_degree * i as u64,
-                        0,
-                        0,
-                        0,
-                    ]))
+                            poly_degree * i as u64,
+                            0,
+                            0,
+                            0,
+                        ]))
                         - BlsScalar::one()
                 })
                 .collect();
@@ -331,7 +356,13 @@ pub(crate) mod alloc {
     }
 
     #[cfg(feature = "alloc")]
-    fn best_fft(a: &mut [BlsScalar], omega: BlsScalar, log_n: u32, worker: Option<&Workers>, cpus_hint: Option<usize>) {
+    fn best_fft(
+        a: &mut [BlsScalar],
+        omega: BlsScalar,
+        log_n: u32,
+        worker: Option<&Workers>,
+        cpus_hint: Option<usize>,
+    ) {
         #[cfg(not(feature = "multi-core"))]
         serial_fft(a, omega, log_n);
         #[cfg(feature = "multi-core")]
@@ -355,8 +386,13 @@ pub(crate) mod alloc {
         });
     }
 
-
-    fn parallel_fft_cpu(worker: &Workers, a: &mut [BlsScalar], omega: BlsScalar, log_n: u32, log_cpus: u32) {
+    pub(crate) fn parallel_fft_cpu(
+        worker: &Workers,
+        a: &mut [BlsScalar],
+        omega: BlsScalar,
+        log_n: u32,
+        log_cpus: u32,
+    ) {
         if log_n <= log_cpus {
             serial_fft(a, omega, log_n);
             return;
@@ -371,7 +407,8 @@ pub(crate) mod alloc {
             for (j, tmp) in tmp.iter_mut().enumerate() {
                 scope.spawn(move |_| {
                     let omega_j = omega.pow(&[j as u64, 0, 0, 0]);
-                    let omega_j_step = omega.pow(&[(j as u64) << log_new_n, 0, 0, 0]);
+                    let omega_j_step =
+                        omega.pow(&[(j as u64) << log_new_n, 0, 0, 0]);
                     let mut elt = BlsScalar::one();
                     for i in 0..(1 << log_new_n) {
                         for s in 0..num_cpus {

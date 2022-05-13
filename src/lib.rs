@@ -79,6 +79,8 @@ pub mod commitment_scheme;
 pub mod error;
 pub mod prelude;
 pub mod proof_system;
+mod gpu;
+mod test_utils;
 
 
 #[doc = include_str!("../docs/notes-intro.md")]

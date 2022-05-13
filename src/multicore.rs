@@ -6,10 +6,18 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use crossbeam::sync::WaitGroup;
 use crossbeam::thread::Scope;
+use futures::channel::mpsc;
 use futures::channel::oneshot::{channel, Receiver};
 use futures::executor::{block_on, ThreadPool};
 use futures::future::lazy;
+use futures::{FutureExt, Stream};
+use lazy_static::lazy_static;
+
+lazy_static! {
+    pub static ref WORKERS: Option<Workers> = Some(Workers::new());
+}
 
 #[derive(Clone)]
 pub struct Workers {
@@ -22,7 +30,10 @@ impl Workers {
         let cpus = num_cpus::get_physical();
         Workers {
             cpus,
-            pool: ThreadPool::builder().pool_size(cpus).create().expect("should create a thread pool for futures execution"),
+            pool: ThreadPool::builder()
+                .pool_size(cpus)
+                .create()
+                .expect("should create a thread pool for futures execution"),
         }
     }
 
@@ -30,12 +41,11 @@ impl Workers {
         log2_floor(self.cpus)
     }
 
-    pub fn compute<F, T, E>(
-        &self, f: F,
-    ) -> Waiter<T, E>
-        where F: FnOnce() -> Result<T, E> + Send + 'static,
-              T: Send + 'static,
-              E: Send + 'static
+    pub fn compute<F, T, E>(&self, f: F) -> Waiter<T, E>
+    where
+        F: FnOnce() -> Result<T, E> + Send + 'static,
+        T: Send + 'static,
+        E: Send + 'static,
     {
         let (sender, receiver) = channel();
         let lazy_future = lazy(move |_| {
@@ -46,33 +56,24 @@ impl Workers {
             }
         });
 
-        let waiter = Waiter {
-            receiver
-        };
+        let waiter = Waiter { receiver };
 
         self.pool.spawn_ok(lazy_future);
 
         waiter
     }
 
-    pub fn scope<'a, F, R>(
-        &self,
-        elements: usize,
-        f: F,
-    ) -> R
-        where F: FnOnce(&Scope<'a>, usize) -> R
+    pub fn scope<'a, F, R>(&self, elements: usize, f: F) -> R
+    where
+        F: FnOnce(&Scope<'a>, usize) -> R,
     {
         let chunk_size = self.get_chunk_size(elements);
 
-        crossbeam::scope(|scope| {
-            f(scope, chunk_size)
-        }).expect("underlying must run. ")
+        crossbeam::scope(|scope| f(scope, chunk_size))
+            .expect("underlying must run. ")
     }
 
-    pub fn get_chunk_size(
-        &self,
-        elements: usize,
-    ) -> usize {
+    pub fn get_chunk_size(&self, elements: usize) -> usize {
         let chunk_size = if elements <= self.cpus {
             1
         } else {
@@ -82,8 +83,16 @@ impl Workers {
         chunk_size
     }
 
-    pub fn chunk_size_for_num_spawned_threads(elements: usize, num_threads: usize) -> usize {
-        assert!(elements >= num_threads, "received {} elements to spawn {} threads", elements, num_threads);
+    pub fn chunk_size_for_num_spawned_threads(
+        elements: usize,
+        num_threads: usize,
+    ) -> usize {
+        assert!(
+            elements >= num_threads,
+            "received {} elements to spawn {} threads",
+            elements,
+            num_threads
+        );
         if elements % num_threads == 0 {
             elements / num_threads
         } else {
@@ -92,7 +101,6 @@ impl Workers {
     }
 }
 
-
 pub struct Waiter<T, E> {
     receiver: Receiver<Result<T, E>>,
 }
@@ -100,8 +108,7 @@ pub struct Waiter<T, E> {
 impl<T: Send + 'static, E: Send + 'static> Future for Waiter<T, E> {
     type Output = Result<T, E>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output>
-    {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let rec = unsafe { self.map_unchecked_mut(|s| &mut s.receiver) };
         match rec.poll(cx) {
             Poll::Ready(v) => {
