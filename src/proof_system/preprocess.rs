@@ -6,15 +6,16 @@
 
 //! Methods to preprocess the constraint system for use in a proof
 
-use crate::commitment_scheme::CommitKey;
-use crate::constraint_system::TurboComposer;
-use crate::plonkup::PreprocessedLookupTable;
-
-use crate::error::Error;
-use crate::fft::{EvaluationDomain, Evaluations, Polynomial};
-use crate::proof_system::{widget, ProverKey};
 use dusk_bls12_381::BlsScalar;
 use merlin::Transcript;
+
+use crate::commitment_scheme::CommitKey;
+use crate::constraint_system::TurboComposer;
+use crate::error::Error;
+use crate::fft::{EvaluationDomain, Evaluations, Polynomial};
+use crate::gpu::LockedFFTKernel;
+use crate::plonkup::PreprocessedLookupTable;
+use crate::proof_system::{widget, ProverKey};
 
 /// Struct that contains all selector and permutation [`Polynomials`]s
 pub(crate) struct Polynomials {
@@ -350,37 +351,62 @@ impl TurboComposer {
         // 1. Pad circuit to a power of two
         self.pad(domain.size as usize - self.n);
 
-        let q_m_poly =
-            Polynomial::from_coefficients_slice(&domain.ifft(&self.q_m));
-        let q_l_poly =
-            Polynomial::from_coefficients_slice(&domain.ifft(&self.q_l));
-        let q_r_poly =
-            Polynomial::from_coefficients_slice(&domain.ifft(&self.q_r));
-        let q_o_poly =
-            Polynomial::from_coefficients_slice(&domain.ifft(&self.q_o));
-        let q_c_poly =
-            Polynomial::from_coefficients_slice(&domain.ifft(&self.q_c));
-        let q_4_poly =
-            Polynomial::from_coefficients_slice(&domain.ifft(&self.q_4));
-        let q_k_poly =
-            Polynomial::from_coefficients_slice(&domain.ifft(&self.q_k));
-        let q_arith_poly =
-            Polynomial::from_coefficients_slice(&domain.ifft(&self.q_arith));
-        let q_range_poly =
-            Polynomial::from_coefficients_slice(&domain.ifft(&self.q_range));
-        let q_logic_poly =
-            Polynomial::from_coefficients_slice(&domain.ifft(&self.q_logic));
-        let q_fixed_group_add_poly = Polynomial::from_coefficients_slice(
-            &domain.ifft(&self.q_fixed_group_add),
+        let mut kern = Some(LockedFFTKernel::new(false));
+
+        let mut q_m_coeffs = self.q_m.clone();
+        assert_eq!(q_m_coeffs.len() as u64, domain.size);
+        let mut q_l_coeffs = self.q_l.clone();
+        assert_eq!(q_l_coeffs.len() as u64, domain.size);
+        let mut q_r_coeffs = self.q_r.clone();
+        assert_eq!(q_r_coeffs.len() as u64, domain.size);
+        let mut q_o_coeffs = self.q_o.clone();
+        let mut q_c_coeffs = self.q_c.clone();
+        let mut q_4_coeffs = self.q_4.clone();
+        let mut q_k_coeffs = self.q_k.clone();
+        let mut q_arith_coeffs = self.q_arith.clone();
+        let mut q_range_coeffs = self.q_range.clone();
+        let mut q_logic_coeffs = self.q_logic.clone();
+        let mut q_fixed_group_add_coeffs = self.q_fixed_group_add.clone();
+        let mut q_variable_grou_add_coeffs = self.q_variable_group_add.clone();
+        domain.many_ifft(
+            &mut [
+                &mut q_m_coeffs,
+                &mut q_l_coeffs,
+                &mut q_r_coeffs,
+                &mut q_o_coeffs,
+                &mut q_c_coeffs,
+                &mut q_4_coeffs,
+                &mut q_k_coeffs,
+                &mut q_arith_coeffs,
+                &mut q_range_coeffs,
+                &mut q_logic_coeffs,
+                &mut q_fixed_group_add_coeffs,
+                &mut q_variable_grou_add_coeffs,
+            ],
+            &mut kern,
         );
-        let q_variable_group_add_poly = Polynomial::from_coefficients_slice(
-            &domain.ifft(&self.q_variable_group_add),
-        );
+        drop(kern);
+
+        let q_m_poly = Polynomial::from_coefficients_vec(q_m_coeffs);
+        let q_l_poly = Polynomial::from_coefficients_vec(q_l_coeffs);
+        let q_r_poly = Polynomial::from_coefficients_vec(q_r_coeffs);
+        let q_o_poly = Polynomial::from_coefficients_vec(q_o_coeffs);
+        let q_c_poly = Polynomial::from_coefficients_vec(q_c_coeffs);
+        let q_4_poly = Polynomial::from_coefficients_vec(q_4_coeffs);
+        let q_k_poly = Polynomial::from_coefficients_vec(q_k_coeffs);
+        let q_arith_poly = Polynomial::from_coefficients_vec(q_arith_coeffs);
+        let q_range_poly = Polynomial::from_coefficients_vec(q_range_coeffs);
+        let q_logic_poly = Polynomial::from_coefficients_vec(q_logic_coeffs);
+        let q_fixed_group_add_poly =
+            Polynomial::from_coefficients_vec(q_fixed_group_add_coeffs);
+        let q_variable_group_add_poly =
+            Polynomial::from_coefficients_vec(q_variable_grou_add_coeffs);
 
         // 2. Compute the sigma polynomials
         let [s_sigma_1_poly, s_sigma_2_poly, s_sigma_3_poly, s_sigma_4_poly] =
             self.perm.compute_sigma_polynomials(self.n, &domain);
 
+        // ==== 5n Start ====
         let q_m_poly_commit = commit_key.commit(&q_m_poly).unwrap_or_default();
         let q_l_poly_commit = commit_key.commit(&q_l_poly).unwrap_or_default();
         let q_r_poly_commit = commit_key.commit(&q_r_poly).unwrap_or_default();
@@ -400,11 +426,14 @@ impl TurboComposer {
         let q_variable_group_add_poly_commit = commit_key
             .commit(&q_variable_group_add_poly)
             .unwrap_or_default();
+        // ==== 5n End =====
 
+        // ==== sigma start ====
         let s_sigma_1_poly_commit = commit_key.commit(&s_sigma_1_poly)?;
         let s_sigma_2_poly_commit = commit_key.commit(&s_sigma_2_poly)?;
         let s_sigma_3_poly_commit = commit_key.commit(&s_sigma_3_poly)?;
         let s_sigma_4_poly_commit = commit_key.commit(&s_sigma_4_poly)?;
+        // ==== sigma end ====
 
         // 3. Preprocess the lookup table, this generates T_1, T_2, T_3 and T_4
         let preprocessed_table = PreprocessedLookupTable::preprocess(
@@ -501,8 +530,10 @@ impl TurboComposer {
 #[cfg(feature = "std")]
 #[cfg(test)]
 mod test {
-    use super::*;
     use crate::constraint_system::helper::*;
+
+    use super::*;
+
     #[test]
     /// Tests that the circuit gets padded to the correct length
     /// XXX: We can do this test without dummy_gadget method

@@ -4,18 +4,21 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
-use crate::constraint_system::{WireData, Witness};
-use crate::fft::{EvaluationDomain, Polynomial};
 use alloc::vec::Vec;
-use constants::{K1, K2, K3};
+
 use dusk_bls12_381::BlsScalar;
 use hashbrown::HashMap;
 use itertools::izip;
-
-pub(crate) mod constants;
-
 #[cfg(feature = "std")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+
+use constants::{K1, K2, K3};
+
+use crate::constraint_system::{WireData, Witness};
+use crate::fft::{EvaluationDomain, Polynomial};
+use crate::gpu::LockedFFTKernel;
+
+pub(crate) mod constants;
 
 /// Permutation provides the necessary state information and functions
 /// to create the permutation polynomial. In the literature, Z(X) is the
@@ -187,19 +190,44 @@ impl Permutation {
         assert_eq!(sigmas[3].len(), n);
 
         // define the sigma permutations using two non quadratic residues
-        let s_sigma_1 = self.compute_permutation_lagrange(&sigmas[0], domain);
-        let s_sigma_2 = self.compute_permutation_lagrange(&sigmas[1], domain);
-        let s_sigma_3 = self.compute_permutation_lagrange(&sigmas[2], domain);
-        let s_sigma_4 = self.compute_permutation_lagrange(&sigmas[3], domain);
+        let mut s_sigma_1 =
+            self.compute_permutation_lagrange(&sigmas[0], domain);
+        let mut s_sigma_2 =
+            self.compute_permutation_lagrange(&sigmas[1], domain);
+        let mut s_sigma_3 =
+            self.compute_permutation_lagrange(&sigmas[2], domain);
+        let mut s_sigma_4 =
+            self.compute_permutation_lagrange(&sigmas[3], domain);
+        s_sigma_1.resize(domain.size(), BlsScalar::zero());
+        s_sigma_2.resize(domain.size(), BlsScalar::zero());
+        s_sigma_3.resize(domain.size(), BlsScalar::zero());
+        s_sigma_4.resize(domain.size(), BlsScalar::zero());
 
-        let s_sigma_1_poly =
-            Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_1));
-        let s_sigma_2_poly =
-            Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_2));
-        let s_sigma_3_poly =
-            Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_3));
-        let s_sigma_4_poly =
-            Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_4));
+        let mut kern = Some(LockedFFTKernel::new(false));
+        domain.many_ifft(
+            &mut [
+                &mut s_sigma_1,
+                &mut s_sigma_2,
+                &mut s_sigma_3,
+                &mut s_sigma_4,
+            ],
+            &mut kern,
+        );
+        drop(kern);
+
+        let s_sigma_1_poly = Polynomial::from_coefficients_vec(s_sigma_1);
+        let s_sigma_2_poly = Polynomial::from_coefficients_vec(s_sigma_2);
+        let s_sigma_3_poly = Polynomial::from_coefficients_vec(s_sigma_3);
+        let s_sigma_4_poly = Polynomial::from_coefficients_vec(s_sigma_4);
+
+        // let s_sigma_1_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_1));
+        // let s_sigma_2_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_2));
+        // let s_sigma_3_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_3));
+        // let s_sigma_4_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_4));
 
         [
             s_sigma_1_poly,
@@ -410,13 +438,15 @@ fn plonkup_denominator_irreducible(
 #[cfg(feature = "std")]
 #[cfg(test)]
 mod test {
-    use super::*;
+    use dusk_bls12_381::BlsScalar;
+    use rand_core::OsRng;
+
     use crate::constraint_system::{Constraint, TurboComposer};
     use crate::error::Error;
     use crate::fft::Polynomial;
     use crate::plonkup::MultiSet;
-    use dusk_bls12_381::BlsScalar;
-    use rand_core::OsRng;
+
+    use super::*;
 
     #[test]
     fn test_compute_lookup_permutation_vec() -> Result<(), Error> {

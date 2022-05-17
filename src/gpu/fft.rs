@@ -142,23 +142,44 @@ impl<'a> SingleFftKernel<'a> {
         self.program.run(closures, input)
     }
 
-    fn radix_fft_with_buffer(
+    pub fn coset_fft(
         &mut self,
-        src_buffer: &mut framework::Buffer<BlsScalar>,
-        dst_buffer: &'a mut framework::Buffer<BlsScalar>,
+        coeffs: &mut [BlsScalar],
         omega: &BlsScalar,
+        gen: BlsScalar,
         log_n: u32,
     ) -> GPUResult<()> {
         let closures = program_closures!(|program,
                                           params: (
-            &mut framework::Buffer<BlsScalar>,
-            &mut framework::Buffer<BlsScalar>,
+            &mut [BlsScalar],
             &BlsScalar,
             u32
         )|
          -> GPUResult<()> {
-            let (src_buffer, dst_buffer, omega, log_n) = params;
-            let n = 1 << log_n;
+            if let Some(maybe_abort) = &self.maybe_abort {
+                if maybe_abort() {
+                    return Err(GPUError::Aborted);
+                }
+            }
+            let (input, omega, log_n) = params;
+            let n = 1u32 << log_n;
+            let mut src_buffer =
+                unsafe { program.create_buffer::<BlsScalar>(n as usize)? };
+            let max_deg: u32 = cmp::min(DISTRIBUTE_POWERS_DEGREE, log_n);
+            let kernel = program.create_kernel(
+                "distribute_powers",
+                ((n >> max_deg) as usize) / LOCAL_WORK_SIZE,
+                LOCAL_WORK_SIZE,
+            )?;
+            kernel
+                .arg(&src_buffer)
+                .arg(&n)
+                .arg(&max_deg)
+                .arg(unsafe { std::mem::transmute::<&BlsScalar, &[u64; 4]>(&gen) })
+                .run()?;
+
+            let mut dst_buffer =
+                unsafe { program.create_buffer::<BlsScalar>(n as usize)? };
             // The precalculated values pq` and `omegas` are valid for radix
             // degrees up to `max_deg`
             let max_deg = cmp::min(MAX_LOG2_RADIX, log_n);
@@ -166,9 +187,9 @@ impl<'a> SingleFftKernel<'a> {
             // Precalculate:
             // [omega^(0/(2^(deg-1))), omega^(1/(2^(deg-1))), ...,
             // omega^((2^(deg-1)-1)/(2^(deg-1)))]
-            let mut pq = vec![E::Fr::zero(); 1 << max_deg >> 1];
-            let twiddle = omega.pow_vartime([(n >> max_deg) as u64]);
-            pq[0] = E::Fr::one();
+            let mut pq = vec![BlsScalar::zero(); 1 << max_deg >> 1];
+            let twiddle = omega.pow_vartime(&[(n >> max_deg) as u64, 0, 0, 0]);
+            pq[0] = BlsScalar::one();
             if max_deg > 1 {
                 pq[1] = twiddle;
                 for i in 2..(1 << max_deg >> 1) {
@@ -180,10 +201,11 @@ impl<'a> SingleFftKernel<'a> {
 
             // Precalculate [omega, omega^2, omega^4, omega^8, ...,
             // omega^(2^31)]
-            let mut omegas = vec![E::Fr::zero(); 32];
+            let mut omegas = vec![BlsScalar::zero(); 32];
             omegas[0] = *omega;
+            let exp_2 = [2u64, 0, 0, 0];
             for i in 1..LOG2_MAX_ELEMENTS {
-                omegas[i] = omegas[i - 1].pow_vartime([2u64]);
+                omegas[i] = omegas[i - 1].pow_vartime(&exp_2);
             }
             let omegas_buffer = program.create_buffer_from_slice(&omegas)?;
             // Specifies log2 of `p`, (http://www.bealto.com/gpu-fft_group-1.html)
@@ -193,8 +215,10 @@ impl<'a> SingleFftKernel<'a> {
                 // 1=>radix2, 2=>radix4, 3=>radix8, ...
                 let deg = cmp::min(max_deg, log_n - log_p);
 
-                if locks::PriorityLock::should_break(priority) {
-                    return Err(GPUError::GPUTaken);
+                if let Some(maybe_abort) = &self.maybe_abort {
+                    if maybe_abort() {
+                        return Err(GPUError::Aborted);
+                    }
                 }
 
                 let n = 1u32 << log_n;
@@ -207,11 +231,11 @@ impl<'a> SingleFftKernel<'a> {
                     local_work_size as usize,
                 )?;
                 kernel
-                    .arg(src_buffer)
-                    .arg(dst_buffer)
+                    .arg(&src_buffer)
+                    .arg(&dst_buffer)
                     .arg(&pq_buffer)
                     .arg(&omegas_buffer)
-                    .arg(&LocalBuffer::<E::Fr>::new(1 << deg))
+                    .arg(&LocalBuffer::<BlsScalar>::new(1 << deg))
                     .arg(&n)
                     .arg(&log_p)
                     .arg(&deg)
@@ -219,57 +243,13 @@ impl<'a> SingleFftKernel<'a> {
                     .run()?;
 
                 log_p += deg;
-                std::mem::swap(src_buffer, dst_buffer);
+                std::mem::swap(&mut src_buffer, &mut dst_buffer);
             }
 
             Ok(())
         });
-        self.program
-            .run(closures, (src_buffer, dst_buffer, omega, log_n))?;
+        self.program.run(closures, (coeffs, omega, log_n))?;
         Ok(())
-    }
-
-    pub fn coset_fft(
-        &mut self,
-        coeffs: &[BlsScalar],
-        log_n: u32,
-        g: &BlsScalar,
-    ) -> GPUResult<()> {
-        // let mut buffer = unsafe { program.create_buffer::<E::Fr>(n)? };
-        // let mut aux_buffer = unsafe { program.create_buffer::<E::Fr>(n)? };
-        // program.write_from_buffer(&mut buffer, &*coeffs)?;
-        // self.distribute_powers(log_n, g, &mut buffer)?;
-        // self.radix_fft_with_buffer(&mut buffer, &mut aux_buffer)
-        todo!()
-    }
-
-    fn distribute_powers(
-        &mut self,
-        log_n: u32,
-        g: &BlsScalar,
-        input: &mut framework::Buffer<BlsScalar>,
-    ) -> GPUResult<()> {
-        let closures = program_closures!(|program,
-                                          input: &mut framework::Buffer<
-            BlsScalar,
-        >|
-         -> GPUResult<()> {
-            let n = 1u32 << log_n;
-            let max_deg: u32 = cmp::min(3, log_n);
-            let kernel = program.create_kernel(
-                "distribute_powers",
-                ((n >> max_deg) as usize) / LOCAL_WORK_SIZE,
-                LOCAL_WORK_SIZE,
-            )?;
-            kernel
-                .arg(input)
-                .arg(&n)
-                .arg(&max_deg)
-                .arg(unsafe { std::mem::transmute::<&BlsScalar, &[u64; 4]>(g) })
-                .run()?;
-            Ok(())
-        });
-        self.program.run(closures, input)
     }
 }
 
@@ -277,7 +257,7 @@ pub struct FFTKernel<'a> {
     kernels: Vec<SingleFftKernel<'a>>,
 }
 
-pub fn create_fft_kernel(priority: bool) -> Option<FFTKernel> {
+pub fn create_fft_kernel<'a>(priority: bool) -> Option<FFTKernel<'a>> {
     match FFTKernel::create(priority) {
         Ok(k) => {
             info!("GPU FFT kernel instantiated!");
@@ -291,7 +271,7 @@ pub fn create_fft_kernel(priority: bool) -> Option<FFTKernel> {
 }
 
 impl<'a> FFTKernel<'a> {
-    pub fn create(priority: bool) -> GPUResult<FFTKernel> {
+    pub fn create(priority: bool) -> GPUResult<Self> {
         let devices = Device::all();
         if priority {
             FFTKernel::create_with_abort(&devices, &|| -> bool {
@@ -411,7 +391,45 @@ impl<'a> FFTKernel<'a> {
         Arc::try_unwrap(result).unwrap().into_inner().unwrap()
     }
 
-    pub fn many_coset_fft(&mut self, inputs: &mut [&mut [BlsScalar]]) {}
+    pub fn many_coset_fft(
+        &mut self,
+        inputs: &mut [&mut [BlsScalar]],
+        omegas: &[BlsScalar],
+        gen: BlsScalar,
+        log_ns: &[u32],
+        worker: &Workers,
+    ) -> GPUResult<()> {
+        let n = inputs.len();
+        let num_devices = self.kernels.len();
+        let chunk_size = ((n as f64) / (num_devices as f64)).ceil() as usize;
+        let result = Arc::new(RwLock::new(Ok(())));
+        worker.scope(num_devices, |scope, n| {
+            for (((inputs, omegas), log_ns), kern) in inputs
+                .chunks_mut(chunk_size)
+                .zip(omegas.chunks(chunk_size))
+                .zip(log_ns.chunks(chunk_size))
+                .zip(self.kernels.iter_mut())
+            {
+                let result = result.clone();
+                scope.spawn(move |_| {
+                    for ((input, omega), log_n) in
+                        inputs.iter_mut().zip(omegas.iter()).zip(log_ns.iter())
+                    {
+                        if result.read().unwrap().is_err() {
+                            break;
+                        }
+                        if let Err(err) =
+                            kern.coset_fft(input, omega, gen, *log_n)
+                        {
+                            *result.write().unwrap() = Err(err);
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        Arc::try_unwrap(result).unwrap().into_inner().unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -442,8 +460,8 @@ mod tests {
         let worker = Workers::new();
         let log_threads = worker.log_num_cpus();
         let devices = Device::all();
-        let mut kern =
-            FFTKernel::create(&devices).expect("Cannot initialize kernel!");
+        let mut kern = FFTKernel::create_with_devices(&devices)
+            .expect("Cannot initialize kernel!");
 
         for log_d in 1..=20 {
             let d = 1 << log_d;
@@ -499,8 +517,8 @@ mod tests {
         let worker = Workers::new();
         let log_threads = worker.log_num_cpus();
         let devices = Device::all();
-        let mut kern =
-            FFTKernel::create(&devices).expect("Cannot initialize kernel!");
+        let mut kern = FFTKernel::create_with_devices(&devices)
+            .expect("Cannot initialize kernel!");
 
         for log_d in 1..=20 {
             let d = 1 << log_d;

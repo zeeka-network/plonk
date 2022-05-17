@@ -89,15 +89,18 @@ pub(crate) mod alloc {
     #[rustfmt::skip]
     use ::alloc::vec::Vec;
     use core::ops::MulAssign;
+    use std::iter;
     use std::ops::AddAssign;
 
     use dusk_bls12_381::{GENERATOR, ROOT_OF_UNITY, TWO_ADACITY};
+    use log::{error, info};
     #[cfg(feature = "std")]
     use rayon::prelude::*;
 
     use crate::error::Error;
     use crate::fft::Evaluations;
     use crate::gpu;
+    use crate::gpu::GPUResult;
     use crate::multicore::{Workers, WORKERS};
 
     use super::*;
@@ -150,6 +153,27 @@ pub(crate) mod alloc {
             coeffs
         }
 
+        /// Compute many FFT
+        pub(crate) fn many_fft(
+            &self,
+            coeffs: &mut [&mut [BlsScalar]],
+            kern: &mut Option<gpu::LockedFFTKernel>,
+        ) {
+            let (omegas, exps): (Vec<_>, Vec<_>) =
+                iter::repeat((self.group_gen, self.log_size_of_group))
+                    .take(coeffs.len())
+                    .into_iter()
+                    .unzip();
+            best_many_fft(
+                coeffs,
+                omegas.as_slice(),
+                exps.as_slice(),
+                kern,
+                WORKERS.as_ref(),
+                None,
+            )
+        }
+
         /// Compute a FFT, modifying the vector in place.
         fn fft_in_place(&self, coeffs: &mut Vec<BlsScalar>) {
             coeffs.resize(self.size(), BlsScalar::zero());
@@ -167,6 +191,43 @@ pub(crate) mod alloc {
             let mut evals = evals.to_vec();
             self.ifft_in_place(&mut evals);
             evals
+        }
+
+        pub(crate) fn many_ifft(
+            &self,
+            coeffs: &mut [&mut [BlsScalar]],
+            kern: &mut Option<gpu::LockedFFTKernel>,
+        ) {
+            assert!(
+                WORKERS.as_ref().is_some(),
+                "workers must be initialized in multi-core"
+            );
+            let (omegas, exps): (Vec<_>, Vec<_>) =
+                iter::repeat((self.generator_inv, self.log_size_of_group))
+                    .take(coeffs.len())
+                    .into_iter()
+                    .unzip();
+            best_many_fft(
+                coeffs,
+                omegas.as_slice(),
+                exps.as_slice(),
+                kern,
+                WORKERS.as_ref(),
+                None,
+            );
+            let workers = WORKERS.as_ref().unwrap();
+            for coeffs in coeffs {
+                workers.scope(coeffs.len(), |scope, chunk| {
+                    let minv = self.size_inv;
+                    for c in coeffs.chunks_mut(chunk) {
+                        scope.spawn(move |_| {
+                            for c in c {
+                                *c *= minv
+                            }
+                        });
+                    }
+                });
+            }
         }
 
         /// Compute an IFFT, modifying the vector in place.
@@ -225,13 +286,47 @@ pub(crate) mod alloc {
             coeffs
         }
 
+        /// Compute coset FFT with same GENERATOR and log of the domain
         pub(crate) fn many_coset_fft(
             &self,
-            coeffs: &[&[BlsScalar]],
-            evas: &mut [Evaluations],
+            coeffs: &mut [&mut [BlsScalar]],
             kern: &mut Option<gpu::LockedFFTKernel>,
         ) {
-
+            let (omegas, exps): (Vec<_>, Vec<_>) =
+                iter::repeat((self.group_gen, self.log_size_of_group))
+                    .take(coeffs.len())
+                    .into_iter()
+                    .unzip();
+            if let Some(kern) = kern {
+                assert!(WORKERS.as_ref().is_some(), "GPU feature");
+                info!("many coset fft in GPU !");
+                kern.with(|kern| {
+                    kern.many_coset_fft(
+                        coeffs,
+                        omegas.as_slice(),
+                        GENERATOR,
+                        exps.as_slice(),
+                        WORKERS.as_ref().unwrap(),
+                    )
+                });
+            } else {
+                info!("many coset fft on CPU !");
+                for coeffs in coeffs.iter_mut() {
+                    assert_eq!(coeffs.len(), self.size());
+                    Self::distribute_powers(
+                        coeffs,
+                        GENERATOR,
+                        WORKERS.as_ref(),
+                    );
+                    best_fft(
+                        coeffs,
+                        self.group_gen,
+                        self.log_size_of_group,
+                        WORKERS.as_ref(),
+                        None,
+                    )
+                }
+            }
         }
 
         /// Compute a FFT over a coset of the domain, modifying the input vector
@@ -355,6 +450,68 @@ pub(crate) mod alloc {
         }
     }
 
+    fn gpu_fft(
+        kern: &mut gpu::FFTKernel,
+        coeffs: &mut [&mut [BlsScalar]],
+        omegas: &[BlsScalar],
+        log_ns: &[u32],
+        worker: &Workers,
+    ) -> GPUResult<()> {
+        kern.radix_fft_many(coeffs, omegas, log_ns, worker)
+    }
+
+    fn best_many_fft(
+        coeffs: &mut [&mut [BlsScalar]],
+        omegas: &[BlsScalar],
+        log_ns: &[u32],
+        kern: &mut Option<gpu::LockedFFTKernel>,
+        worker: Option<&Workers>,
+        cpus_hint: Option<usize>,
+    ) {
+        assert!(
+            worker.is_some(),
+            "workers must be initialized in multi-core"
+        );
+        if let Some(ref mut kern) = kern {
+            match kern.with(|k: &mut gpu::FFTKernel| {
+                gpu_fft(k, coeffs, omegas, log_ns, worker.unwrap())
+            }) {
+                Ok(_) => {
+                    return;
+                }
+                Err(e) => {
+                    error!("error {} occurred when computing fft on gpu", e)
+                }
+            }
+        }
+        for ((a, omega), log_n) in
+            coeffs.iter_mut().zip(omegas.iter()).zip(log_ns.iter())
+        {
+            let worker = worker.unwrap();
+            let log_cpus = satisfy_cpu(cpus_hint, worker);
+            parallel_fft_cpu(worker, *a, *omega, *log_n, log_cpus);
+        }
+    }
+
+    fn satisfy_cpu(cpus_hint: Option<usize>, worker: &Workers) -> u32 {
+        let log_cpus = if let Some(hint) = cpus_hint {
+            assert!(hint <= worker.cpus);
+            let hint = if hint > 0 {
+                let mut pow = 0;
+                while (1 << (pow + 1)) <= hint {
+                    pow += 1;
+                }
+                pow
+            } else {
+                0
+            };
+            hint
+        } else {
+            worker.log_num_cpus()
+        };
+        log_cpus
+    }
+
     #[cfg(feature = "alloc")]
     fn best_fft(
         a: &mut [BlsScalar],
@@ -367,21 +524,7 @@ pub(crate) mod alloc {
         serial_fft(a, omega, log_n);
         #[cfg(feature = "multi-core")]
         worker.map(|worker| {
-            let log_cpus = if let Some(hint) = cpus_hint {
-                assert!(hint <= worker.cpus);
-                let hint = if hint > 0 {
-                    let mut pow = 0;
-                    while (1 << (pow + 1)) <= hint {
-                        pow += 1;
-                    }
-                    pow
-                } else {
-                    0
-                };
-                hint
-            } else {
-                worker.log_num_cpus()
-            };
+            let log_cpus = satisfy_cpu(cpus_hint, worker);
             parallel_fft_cpu(worker, a, omega, log_n, log_cpus)
         });
     }

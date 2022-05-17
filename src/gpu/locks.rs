@@ -96,15 +96,15 @@ impl Drop for PriorityLock {
 macro_rules! locked_kernel {
     ($class:ident, $kern:ident, $func:ident, $name:expr) => {
         #[allow(clippy::upper_case_acronyms)]
-        pub struct $class
+        pub struct $class<'a>
         {
             priority: bool,
-            kernel_and_lock: Option<($kern<'a, E>, GPULock)>,
+            kernel_and_lock: Option<($kern<'a>, GPULock)>,
         }
 
-        impl $class
+        impl<'a> $class<'a>
         {
-            pub fn new(priority: bool) -> $class {
+            pub fn new(priority: bool) -> $class<'a> {
                 $class {
                     priority,
                     kernel_and_lock: None,
@@ -145,7 +145,7 @@ macro_rules! locked_kernel {
                         match f(k) {
                             // Re-trying to run on the GPU is the core of this loop, all other
                             // cases abort the loop.
-                            Err(GpuError::GpuTaken) => {
+                            Err(GPUError::GPUTaken) => {
                                 self.free();
                             }
                             Err(e) => {
@@ -155,7 +155,7 @@ macro_rules! locked_kernel {
                             Ok(v) => return Ok(v),
                         }
                     } else {
-                        return Err(GpuError::KernelUninitialized);
+                        return Err(GPUError::KernelUninitialized);
                     }
                 }
             }

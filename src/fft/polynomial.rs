@@ -7,14 +7,18 @@
 //! This module contains an implementation of a polynomial in coefficient form
 //! Where each coefficient is represented using a position in the underlying
 //! vector.
-use super::{EvaluationDomain, Evaluations};
-use crate::error::Error;
-use crate::util;
 use alloc::vec::Vec;
+use core::iter::Sum;
 use core::ops::{Add, AddAssign, Deref, DerefMut, Mul, Neg, Sub, SubAssign};
+
 use dusk_bls12_381::BlsScalar;
 use dusk_bytes::{DeserializableSlice, Serializable};
+
+use crate::error::Error;
 use crate::multicore::{Workers, WORKERS};
+use crate::util;
+
+use super::{EvaluationDomain, Evaluations};
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 /// Represents a polynomial in coeffiient form.
@@ -71,6 +75,16 @@ impl Polynomial {
             .map_or(true, |coeff| coeff != &BlsScalar::zero()));
 
         result
+    }
+
+    /// While there are zeros at the end of the coefficient vector, pop them off
+    /// # Panics
+    pub(crate) fn truncate_leading_zero(&mut self) {
+        self.truncate_leading_zeros();
+        assert!(self
+            .coeffs
+            .last()
+            .map_or(true, |coeff| coeff != &BlsScalar::zero()));
     }
 
     /// Returns the degree of the [`Polynomial`].
@@ -132,9 +146,14 @@ impl Polynomial {
 
         Ok(Polynomial { coeffs })
     }
-}
 
-use core::iter::Sum;
+    /// Generate a Polynomial with src, but it is not ready to arth
+    pub(crate) fn with_pre_alloc(src: &[BlsScalar]) -> Self {
+        Self {
+            coeffs: src.to_vec(),
+        }
+    }
+}
 
 impl Sum for Polynomial {
     fn sum<I>(iter: I) -> Self
@@ -355,9 +374,7 @@ impl<'a, 'b> Mul<&'a Polynomial> for &'b Polynomial {
 #[cfg(feature = "multi-core")]
 fn parallel_poly_mul_assign(lhs: &Polynomial, rhs: &Polynomial) {
     let workers = WORKERS.as_ref();
-    workers.map(|worker| {
-
-    });
+    workers.map(|worker| {});
 }
 
 impl<'a, 'b> Mul<&'a BlsScalar> for &'b Polynomial {
@@ -405,8 +422,9 @@ impl<'a, 'b> Sub<&'a BlsScalar> for &'b Polynomial {
 #[cfg(feature = "std")]
 #[cfg(test)]
 mod test {
-    use super::*;
     use rand_core::{CryptoRng, RngCore};
+
+    use super::*;
 
     impl Polynomial {
         /// Outputs a polynomial of degree `d` where each coefficient is sampled

@@ -1,3 +1,4 @@
+pub(crate) use self::error::*;
 #[cfg(any(feature = "cuda", feature = "opencl"))]
 pub use self::fft::*;
 #[cfg(any(feature = "cuda", feature = "opencl"))]

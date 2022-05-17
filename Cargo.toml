@@ -74,9 +74,10 @@ trace = []
 trace-print = ["trace"]
 canon = ["dusk-bls12_381/canon", "dusk-jubjub/canon", "canonical", "canonical_derive"]
 multi-core = ["rayon", "num_cpus", "futures/thread-pool", "crossbeam", "dusk-bls12_381/parallel"]
-gpu = ["rust-gpu-tools", "cuda", "fs2", "dusk-bls12_381/gpu"]
+gpu = ["cuda", "fs2", "dusk-bls12_381/gpu"]
 cuda = ["rust-gpu-tools/cuda", "ec-gpu-gen/cuda"]
 opencl = ["rust-gpu-tools/opencl", "ec-gpu-gen/opencl"]
+benchmark-on-paper = []
 
 [profile.release]
 panic = "abort"
