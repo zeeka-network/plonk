@@ -3,16 +3,12 @@ use std::cmp;
 use std::sync::{Arc, RwLock};
 
 use dusk_bls12_381::BlsScalar;
-use log::{debug, error, info, warn};
-#[cfg(feature = "cuda")]
-use rust_gpu_tools::cuda as framework;
-#[cfg(not(feature = "cuda"))]
-use rust_gpu_tools::opencl as framework;
-use rust_gpu_tools::{program_closures, Device, LocalBuffer, Program, Vendor};
+use log::{error, info, warn};
+use rust_gpu_tools::{program_closures, Device, LocalBuffer, Program};
 
 use crate::gpu::error::{GPUError, GPUResult};
 use crate::gpu::locks::PriorityLock;
-use crate::gpu::{locks, program};
+use crate::gpu::program;
 use crate::multicore::Workers;
 
 const DISTRIBUTE_POWERS_DEGREE: u32 = 3;
@@ -371,7 +367,7 @@ impl<'a> FFTKernel<'a> {
 
         let result = Arc::new(RwLock::new(Ok(())));
 
-        worker.scope(num_devices, |scope, n| {
+        worker.scope(num_devices, |scope, _| {
             for (((inputs, omegas), log_ns), kern) in inputs
                 .chunks_mut(chunk_size)
                 .zip(omegas.chunks(chunk_size))
@@ -422,7 +418,6 @@ mod tests {
     use dusk_bls12_381::{ROOT_OF_UNITY, TWO_ADACITY};
 
     use crate::fft::domain::alloc::{parallel_fft_cpu, serial_fft};
-    use crate::fft::EvaluationDomain;
 
     use super::*;
 

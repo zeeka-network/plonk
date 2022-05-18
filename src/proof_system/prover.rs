@@ -343,14 +343,24 @@ impl Prover {
             zeta,
         );
 
+        // let compressed_t_multiset_coeffs = compressed_t_multiset.0.clone();
         // new Compute t'
+        // let t_prime_poly = Polynomial::from_coefficients_vec(
+        //     domain.ifft(&compressed_t_multiset.0),
+        // );
+        let mut t_prime_coeffs = compressed_t_multiset.0.clone();
+        let mut f_coeffs = compressed_f_multiset.0.clone();
+        domain.many_ifft(&mut [&mut t_prime_coeffs, &mut f_coeffs], &mut kernel);
         let t_prime_poly = Polynomial::from_coefficients_vec(
-            domain.ifft(&compressed_t_multiset.0),
+            t_prime_coeffs,
         );
+        // new Compute long query poly
+        Prover::blind_coeffs_with_inv(&mut f_coeffs, 1, rng);
+        let f_poly = Polynomial::from_coefficients_vec(f_coeffs);
 
-        // Compute long query poly
-        let f_poly =
-            Prover::blind_poly(&compressed_f_multiset.0, 1, &domain, rng);
+        // old Compute long query poly
+        // let f_poly =
+        //     Prover::blind_poly(&compressed_f_multiset.0, 1, &domain, rng);
 
         // Commit to query polynomial
         let f_poly_commit = commit_key.commit(&f_poly)?;
@@ -366,9 +376,19 @@ impl Prover {
         // Compute first and second halves of s, as h_1 and h_2
         let (h_1, h_2) = s.halve_alternating();
 
+        let mut h_1_coeffs = h_1.0.clone();
+        let mut h_2_coeffs = h_2.0.clone();
+        domain.many_ifft(&mut [&mut h_1_coeffs, &mut h_2_coeffs], &mut kernel);
+        Prover::blind_coeffs_with_inv(&mut h_1_coeffs, 2, rng);
+        Prover::blind_coeffs_with_inv(&mut h_2_coeffs, 1, rng);
         // Compute h polys
-        let h_1_poly = Prover::blind_poly(&h_1.0, 2, &domain, rng);
-        let h_2_poly = Prover::blind_poly(&h_2.0, 1, &domain, rng);
+        let h_1_poly = Polynomial::from_coefficients_vec(h_1_coeffs);
+        let h_2_poly = Polynomial::from_coefficients_vec(h_2_coeffs);
+
+
+        // Compute h polys
+        // let h_1_poly = Prover::blind_poly(&h_1.0, 2, &domain, rng);
+        // let h_2_poly = Prover::blind_poly(&h_2.0, 1, &domain, rng);
 
         // Commit to h polys
         let h_1_poly_commit = commit_key.commit(&h_1_poly).unwrap();
@@ -386,23 +406,29 @@ impl Prover {
         let delta = transcript.challenge_scalar(b"delta");
         let epsilon = transcript.challenge_scalar(b"epsilon");
 
-        let z_1_poly = Prover::blind_poly(
-            &self.cs.perm.compute_permutation_vec(
-                &domain,
-                [a_w_scalar, b_w_scalar, c_w_scalar, d_w_scalar],
-                &beta,
-                &gamma,
-                [
-                    &prover_key.permutation.s_sigma_1.0,
-                    &prover_key.permutation.s_sigma_2.0,
-                    &prover_key.permutation.s_sigma_3.0,
-                    &prover_key.permutation.s_sigma_4.0,
-                ],
-            ),
-            2,
+        let mut z_1_coeffs = self.cs.perm.compute_permutation_vec(
             &domain,
-            rng,
+            [a_w_scalar, b_w_scalar, c_w_scalar, d_w_scalar],
+            &beta,
+            &gamma,
+            [
+                &prover_key.permutation.s_sigma_1.0,
+                &prover_key.permutation.s_sigma_2.0,
+                &prover_key.permutation.s_sigma_3.0,
+                &prover_key.permutation.s_sigma_4.0,
+            ],
+            &mut kernel,
         );
+        domain.many_ifft(&mut [&mut z_1_coeffs], &mut kernel);
+        Prover::blind_coeffs_with_inv(&mut z_1_coeffs, 2, rng);
+        let z_1_poly = Polynomial::from_coefficients_vec(z_1_coeffs);
+
+        // let z_1_poly = Prover::blind_poly(
+        //     &z_1_coeffs,
+        //     2,
+        //     &domain,
+        //     rng,
+        // );
 
         // Commit to permutation polynomial
         let z_1_poly_commit = commit_key.commit(&z_1_poly)?;
@@ -411,20 +437,24 @@ impl Prover {
         transcript.append_commitment(b"z_1", &z_1_poly_commit);
 
         // Compute lookup permutation poly
-        let z_2_poly = Prover::blind_poly(
-            &self.cs.perm.compute_lookup_permutation_vec(
-                &domain,
-                &compressed_f_multiset.0,
-                &compressed_t_multiset.0,
-                &h_1.0,
-                &h_2.0,
-                &delta,
-                &epsilon,
-            ),
-            2,
+        let mut z_2_coeffs = self.cs.perm.compute_lookup_permutation_vec(
             &domain,
-            rng,
+            &compressed_f_multiset.0,
+            &compressed_t_multiset.0,
+            &h_1.0,
+            &h_2.0,
+            &delta,
+            &epsilon,
         );
+        domain.many_ifft(&mut [&mut z_2_coeffs], &mut kernel);
+        Prover::blind_coeffs_with_inv(&mut z_2_coeffs, 2, rng);
+        let z_2_poly = Polynomial::from_coefficients_vec(z_2_coeffs);
+        // let z_2_poly = Prover::blind_poly(
+        //     &z_2_coeffs,
+        //     2,
+        //     &domain,
+        //     rng,
+        // );
 
         // Commit to permutation polynomial
         let z_2_poly_commit = commit_key.commit(&z_2_poly)?;

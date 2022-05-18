@@ -6,7 +6,6 @@ fn main() {
     use std::process::Command;
     use std::{env, fs};
 
-    use dusk_bls12_381::BlsScalar;
     use ec_gpu_gen::Limb32;
     use sha2::{Digest, Sha256};
 

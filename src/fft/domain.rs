@@ -15,8 +15,6 @@
 use dusk_bls12_381::BlsScalar;
 use dusk_bytes::{DeserializableSlice, Serializable};
 
-use crate::multicore::WORKERS;
-
 /// Defines a domain over which finite field (I)FFTs can be performed. Works
 /// only for fields that have a large multiplicative subgroup of size that is
 /// a power-of-2.
@@ -93,7 +91,7 @@ pub(crate) mod alloc {
     use std::ops::AddAssign;
 
     use dusk_bls12_381::{GENERATOR, ROOT_OF_UNITY, TWO_ADACITY};
-    use log::{error, info};
+    use log::{debug, error, info};
     #[cfg(feature = "std")]
     use rayon::prelude::*;
 
@@ -288,7 +286,7 @@ pub(crate) mod alloc {
                         exps.as_slice(),
                         WORKERS.as_ref().unwrap(),
                     )
-                });
+                }).expect("many coset FFT.")
             } else {
                 info!("many coset fft on CPU !");
                 for coeffs in coeffs.iter_mut() {
@@ -430,9 +428,11 @@ pub(crate) mod alloc {
         }
     }
 
-    pub(crate) fn distribute_powers(coeffs: &mut [BlsScalar],
-                                    g: BlsScalar,
-                                    workers: Option<&Workers>,) {
+    pub(crate) fn distribute_powers(
+        coeffs: &mut [BlsScalar],
+        g: BlsScalar,
+        workers: Option<&Workers>,
+    ) {
         #[cfg(not(feature = "multi-core"))]
         {
             let mut pow = BlsScalar::one();
@@ -485,7 +485,7 @@ pub(crate) mod alloc {
                 gpu_fft(k, coeffs, omegas, log_ns, worker.unwrap())
             }) {
                 Ok(_) => {
-                    println!("GPU many fft done !");
+                    debug!("GPU many fft done !");
                     return;
                 }
                 Err(e) => {
@@ -493,7 +493,7 @@ pub(crate) mod alloc {
                 }
             }
         }
-        println!("CPU many fft !");
+        debug!("CPU many fft !");
         for ((a, omega), log_n) in
             coeffs.iter_mut().zip(omegas.iter()).zip(log_ns.iter())
         {

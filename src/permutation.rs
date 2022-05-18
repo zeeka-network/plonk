@@ -229,7 +229,6 @@ impl Permutation {
         let s_sigma_3_poly = Polynomial::from_coefficients_vec(s_sigma_3);
         let s_sigma_4_poly = Polynomial::from_coefficients_vec(s_sigma_4);
 
-
         [
             s_sigma_1_poly,
             s_sigma_2_poly,
@@ -248,6 +247,7 @@ impl Permutation {
         beta: &BlsScalar,
         gamma: &BlsScalar,
         sigma_polys: [&Polynomial; 4],
+        kern: &mut Option<LockedFFTKernel>,
     ) -> Vec<BlsScalar> {
         let n = domain.size();
 
@@ -260,13 +260,27 @@ impl Permutation {
         let gatewise_wires = izip!(wires[0], wires[1], wires[2], wires[3])
             .map(|(w0, w1, w2, w3)| vec![w0, w1, w2, w3]);
 
-        let gatewise_sigmas: Vec<Vec<BlsScalar>> =
-            sigma_polys.iter().map(|sigma| domain.fft(sigma)).collect();
+        // let gatewise_sigmas: Vec<Vec<BlsScalar>> =
+        //     sigma_polys.iter().map(|sigma| domain.fft(sigma)).collect();
+        let mut gatewise_sigmas_0 = sigma_polys[0].coeffs.clone();
+        let mut gatewise_sigmas_1 = sigma_polys[1].coeffs.clone();
+        let mut gatewise_sigmas_2 = sigma_polys[2].coeffs.clone();
+        let mut gatewise_sigmas_3 = sigma_polys[3].coeffs.clone();
+        domain.many_fft(
+            &mut [
+                &mut gatewise_sigmas_0,
+                &mut gatewise_sigmas_1,
+                &mut gatewise_sigmas_2,
+                &mut gatewise_sigmas_3,
+            ],
+            kern,
+        );
+
         let gatewise_sigmas = izip!(
-            &gatewise_sigmas[0],
-            &gatewise_sigmas[1],
-            &gatewise_sigmas[2],
-            &gatewise_sigmas[3]
+            &gatewise_sigmas_0,
+            &gatewise_sigmas_1,
+            &gatewise_sigmas_2,
+            &gatewise_sigmas_3,
         )
         .map(|(s0, s1, s2, s3)| vec![s0, s1, s2, s3]);
 
@@ -933,6 +947,7 @@ mod test {
                     &sigma_polys[2],
                     &sigma_polys[3],
                 ],
+                &mut None,
             ),
         ));
 

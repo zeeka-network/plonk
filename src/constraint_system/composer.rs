@@ -18,13 +18,15 @@
 // it is intended to be like this in order to provide
 // maximum performance and minimum circuit sizes.
 
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+
+use dusk_bls12_381::BlsScalar;
+use hashbrown::HashMap;
+
 use crate::constraint_system::{Constraint, Selector, WiredWitness, Witness};
 use crate::permutation::Permutation;
 use crate::plonkup::LookupTable;
-use alloc::collections::BTreeMap;
-use alloc::vec::Vec;
-use dusk_bls12_381::BlsScalar;
-use hashbrown::HashMap;
 
 /// The TurboComposer is the circuit-builder tool that the `dusk-plonk`
 /// repository provides so that circuit descriptions can be written, stored and
@@ -802,12 +804,14 @@ impl TurboComposer {
 #[cfg(feature = "std")]
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use rand_core::OsRng;
+
     use crate::commitment_scheme::PublicParameters;
     use crate::constraint_system::helper::*;
     use crate::error::Error;
     use crate::proof_system::{Prover, Verifier};
-    use rand_core::OsRng;
+
+    use super::*;
 
     #[test]
     /// Tests that a circuit initially has 3 gates

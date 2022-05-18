@@ -7,6 +7,7 @@
 //! This module contains an implementation of a polynomial in coefficient form
 //! Where each coefficient is represented using a position in the underlying
 //! vector.
+#![allow(dead_code)]
 use alloc::vec::Vec;
 use core::iter::Sum;
 use core::ops::{Add, AddAssign, Deref, DerefMut, Mul, Neg, Sub, SubAssign};
@@ -15,7 +16,6 @@ use dusk_bls12_381::BlsScalar;
 use dusk_bytes::{DeserializableSlice, Serializable};
 
 use crate::error::Error;
-use crate::multicore::{Workers, WORKERS};
 use crate::util;
 
 use super::{EvaluationDomain, Evaluations};
@@ -369,12 +369,6 @@ impl<'a, 'b> Mul<&'a Polynomial> for &'b Polynomial {
             self_evals.interpolate()
         }
     }
-}
-
-#[cfg(feature = "multi-core")]
-fn parallel_poly_mul_assign(lhs: &Polynomial, rhs: &Polynomial) {
-    let workers = WORKERS.as_ref();
-    workers.map(|worker| {});
 }
 
 impl<'a, 'b> Mul<&'a BlsScalar> for &'b Polynomial {

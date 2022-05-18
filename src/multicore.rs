@@ -6,13 +6,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use crossbeam::sync::WaitGroup;
 use crossbeam::thread::Scope;
-use futures::channel::mpsc;
 use futures::channel::oneshot::{channel, Receiver};
 use futures::executor::{block_on, ThreadPool};
 use futures::future::lazy;
-use futures::{FutureExt, Stream};
 use lazy_static::lazy_static;
 
 lazy_static! {
