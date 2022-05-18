@@ -23,7 +23,7 @@ lazy_static = "1.4.0"
 merlin = { version = "3.0", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 dusk-bytes = "0.1"
-dusk-jubjub = { git = "https://github.com/zeeka-network/jubjub.git", rev = "bb6a807", default-features = false }
+dusk-jubjub = { git = "https://github.com/zeeka-network/jubjub.git", rev = "7291f63", default-features = false }
 itertools = { version = "0.9", default-features = false }
 hashbrown = { version = "0.9", default-features = false, features = ["ahash"] }
 rayon = { version = "1.5", optional = true }
@@ -36,7 +36,7 @@ canonical = { version = "0.7", optional = true }
 canonical_derive = { version = "0.7", optional = true }
 
 rust-gpu-tools = { git = "https://github.com/zeeka-network/rust-gpu-tools.git", rev = "6f74077", optional = true }
-dusk-bls12_381 = { git = "https://github.com/zeeka-network/bls12_381.git", rev = "0ed108b", default-features = false, features = ["groups", "pairings", "endo"] }
+dusk-bls12_381 = { git = "https://github.com/zeeka-network/bls12_381.git", rev = "e2e0f8d", default-features = false, features = ["groups", "pairings", "endo"] }
 ec-gpu-gen = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", optional = true }
 fs2 = { version = "0.4", optional = true }
 
@@ -47,7 +47,7 @@ rand = "0.8"
 rand_core = "0.6.3"
 
 [build-dependencies]
-dusk-bls12_381 = { git = "https://github.com/zeeka-network/bls12_381.git", rev = "0ed108b", default-features = false, features = ["groups", "pairings", "endo"] }
+dusk-bls12_381 = { git = "https://github.com/zeeka-network/bls12_381.git", rev = "e2e0f8d", default-features = false, features = ["groups", "pairings", "endo"] }
 execute = "0.2.9"
 ec-gpu = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", optional = true }
 ec-gpu-gen = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", optional = true }

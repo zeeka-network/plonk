@@ -203,10 +203,12 @@ pub(crate) mod alloc {
                 "workers must be initialized in multi-core"
             );
             let (omegas, exps): (Vec<_>, Vec<_>) =
-                iter::repeat((self.generator_inv, self.log_size_of_group))
+                iter::repeat((self.group_gen_inv, self.log_size_of_group))
                     .take(coeffs.len())
                     .into_iter()
                     .unzip();
+            assert_eq!(omegas.len(), coeffs.len());
+            assert_eq!(exps.len(), coeffs.len());
             best_many_fft(
                 coeffs,
                 omegas.as_slice(),
@@ -254,29 +256,7 @@ pub(crate) mod alloc {
             g: BlsScalar,
             workers: Option<&Workers>,
         ) {
-            #[cfg(not(feature = "multi-core"))]
-            {
-                let mut pow = BlsScalar::one();
-                coeffs.iter_mut().for_each(|c| {
-                    *c *= &pow;
-                    pow *= &g
-                })
-            }
-            #[cfg(feature = "multi-core")]
-            {
-                let worker = workers.unwrap();
-                worker.scope(coeffs.len(), |scope, chunk| {
-                    for (i, v) in coeffs.chunks_mut(chunk).enumerate() {
-                        scope.spawn(move |_| {
-                            let mut u = g.pow(&[(i * chunk) as u64, 0, 0, 0]);
-                            for v in v.iter_mut() {
-                                v.mul_assign(&u);
-                                u.mul_assign(&g);
-                            }
-                        });
-                    }
-                });
-            }
+            distribute_powers(coeffs, g, workers);
         }
 
         /// Compute a FFT over a coset of the domain.
@@ -450,6 +430,34 @@ pub(crate) mod alloc {
         }
     }
 
+    pub(crate) fn distribute_powers(coeffs: &mut [BlsScalar],
+                                    g: BlsScalar,
+                                    workers: Option<&Workers>,) {
+        #[cfg(not(feature = "multi-core"))]
+        {
+            let mut pow = BlsScalar::one();
+            coeffs.iter_mut().for_each(|c| {
+                *c *= &pow;
+                pow *= &g
+            })
+        }
+        #[cfg(feature = "multi-core")]
+        {
+            let worker = workers.unwrap();
+            worker.scope(coeffs.len(), |scope, chunk| {
+                for (i, v) in coeffs.chunks_mut(chunk).enumerate() {
+                    scope.spawn(move |_| {
+                        let mut u = g.pow(&[(i * chunk) as u64, 0, 0, 0]);
+                        for v in v.iter_mut() {
+                            v.mul_assign(&u);
+                            u.mul_assign(&g);
+                        }
+                    });
+                }
+            });
+        }
+    }
+
     fn gpu_fft(
         kern: &mut gpu::FFTKernel,
         coeffs: &mut [&mut [BlsScalar]],
@@ -477,6 +485,7 @@ pub(crate) mod alloc {
                 gpu_fft(k, coeffs, omegas, log_ns, worker.unwrap())
             }) {
                 Ok(_) => {
+                    println!("GPU many fft done !");
                     return;
                 }
                 Err(e) => {
@@ -484,6 +493,7 @@ pub(crate) mod alloc {
                 }
             }
         }
+        println!("CPU many fft !");
         for ((a, omega), log_n) in
             coeffs.iter_mut().zip(omegas.iter()).zip(log_ns.iter())
         {

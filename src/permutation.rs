@@ -203,6 +203,15 @@ impl Permutation {
         s_sigma_3.resize(domain.size(), BlsScalar::zero());
         s_sigma_4.resize(domain.size(), BlsScalar::zero());
 
+        // let s_sigma_1_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_1));
+        // let s_sigma_2_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_2));
+        // let s_sigma_3_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_3));
+        // let s_sigma_4_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_4));
+
         let mut kern = Some(LockedFFTKernel::new(false));
         domain.many_ifft(
             &mut [
@@ -220,14 +229,6 @@ impl Permutation {
         let s_sigma_3_poly = Polynomial::from_coefficients_vec(s_sigma_3);
         let s_sigma_4_poly = Polynomial::from_coefficients_vec(s_sigma_4);
 
-        // let s_sigma_1_poly =
-        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_1));
-        // let s_sigma_2_poly =
-        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_2));
-        // let s_sigma_3_poly =
-        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_3));
-        // let s_sigma_4_poly =
-        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_4));
 
         [
             s_sigma_1_poly,

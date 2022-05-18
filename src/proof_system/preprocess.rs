@@ -15,7 +15,7 @@ use crate::error::Error;
 use crate::fft::{EvaluationDomain, Evaluations, Polynomial};
 use crate::gpu::LockedFFTKernel;
 use crate::plonkup::PreprocessedLookupTable;
-use crate::proof_system::{widget, ProverKey};
+use crate::proof_system::{ProverKey, widget};
 
 /// Struct that contains all selector and permutation [`Polynomials`]s
 pub(crate) struct Polynomials {
@@ -128,88 +128,260 @@ impl TurboComposer {
         // 8n, the next power of 2
         let domain_8n = EvaluationDomain::new(8 * domain.size())?;
 
-        let q_m_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_m),
-            domain_8n,
+        // === 5n
+        let mut q_m_coeffs = selectors.q_m.coeffs.clone();
+        q_m_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut q_l_coeffs = selectors.q_l.coeffs.clone();
+        q_l_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut q_r_coeffs = selectors.q_r.coeffs.clone();
+        q_r_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+
+        let mut q_o_coeffs = selectors.q_o.coeffs.clone();
+        q_o_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut q_c_coeffs = selectors.q_c.coeffs.clone();
+        q_c_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut q_4_coeffs = selectors.q_4.coeffs.clone();
+        q_4_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+
+        let mut q_k_coeffs = selectors.q_k.coeffs.clone();
+        q_k_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut q_arith_coeffs = selectors.q_arith.coeffs.clone();
+        q_arith_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut q_range_coeffs = selectors.q_range.coeffs.clone();
+        q_range_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+
+        let mut q_logic_coeffs = selectors.q_logic.coeffs.clone();
+        q_logic_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut q_fixed_group_add_coeffs =
+            selectors.q_fixed_group_add.coeffs.clone();
+        q_fixed_group_add_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut q_variable_group_add_coeffs =
+            selectors.q_variable_group_add.coeffs.clone();
+        q_variable_group_add_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+
+        // ===  sigma 1,2,3,4
+        let mut s_sigma_1_coeffs = selectors.s_sigma_1.coeffs.clone();
+        s_sigma_1_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut s_sigma_2_coeffs = selectors.s_sigma_2.coeffs.clone();
+        s_sigma_2_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut s_sigma_3_coeffs = selectors.s_sigma_3.coeffs.clone();
+        s_sigma_3_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+        let mut s_sigma_4_coeffs = selectors.s_sigma_4.coeffs.clone();
+        s_sigma_4_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+
+        // === preprocessed_table 1,2,3,4
+        let mut preprocessed_table_t_1_coeffs =
+            preprocessed_table.t_1.2.coeffs.clone();
+        preprocessed_table_t_1_coeffs
+            .resize(domain_8n.size(), BlsScalar::zero());
+        let mut preprocessed_table_t_2_coeffs =
+            preprocessed_table.t_2.2.coeffs.clone();
+        preprocessed_table_t_2_coeffs
+            .resize(domain_8n.size(), BlsScalar::zero());
+        let mut preprocessed_table_t_3_coeffs =
+            preprocessed_table.t_3.2.coeffs.clone();
+        preprocessed_table_t_3_coeffs
+            .resize(domain_8n.size(), BlsScalar::zero());
+        let mut preprocessed_table_t_4_coeffs =
+            preprocessed_table.t_4.2.coeffs.clone();
+        preprocessed_table_t_4_coeffs
+            .resize(domain_8n.size(), BlsScalar::zero());
+
+        let mut kern = Some(LockedFFTKernel::new(false));
+        domain_8n.many_coset_fft(
+            &mut [
+                &mut q_m_coeffs,
+                &mut q_l_coeffs,
+                &mut q_r_coeffs,
+                &mut q_o_coeffs,
+                &mut q_c_coeffs,
+                &mut q_4_coeffs,
+                &mut q_k_coeffs,
+                &mut q_arith_coeffs,
+                &mut q_range_coeffs,
+                &mut q_logic_coeffs,
+                &mut q_fixed_group_add_coeffs,
+                &mut q_variable_group_add_coeffs,
+                //
+                &mut s_sigma_1_coeffs,
+                &mut s_sigma_2_coeffs,
+                &mut s_sigma_3_coeffs,
+                &mut s_sigma_4_coeffs,
+                //
+                &mut preprocessed_table_t_1_coeffs,
+                &mut preprocessed_table_t_2_coeffs,
+                &mut preprocessed_table_t_3_coeffs,
+                &mut preprocessed_table_t_4_coeffs,
+            ],
+            &mut kern,
         );
+        drop(kern);
+
+        let q_m_eval_8n =
+            Evaluations::from_vec_and_domain(q_m_coeffs, domain_8n);
         let q_l_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_l),
+            q_l_coeffs,
             domain_8n,
         );
         let q_r_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_r),
+            q_r_coeffs,
             domain_8n,
         );
         let q_o_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_o),
+            q_o_coeffs,
             domain_8n,
         );
         let q_c_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_c),
+            q_c_coeffs,
             domain_8n,
         );
         let q_4_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_4),
+            q_4_coeffs,
             domain_8n,
         );
         let q_k_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_k),
+            q_k_coeffs,
             domain_8n,
         );
         let q_arith_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_arith),
+            q_arith_coeffs,
             domain_8n,
         );
         let q_range_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_range),
+            q_range_coeffs,
             domain_8n,
         );
         let q_logic_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_logic),
+            q_logic_coeffs,
             domain_8n,
         );
         let q_fixed_group_add_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_fixed_group_add),
+            q_fixed_group_add_coeffs,
             domain_8n,
         );
         let q_variable_group_add_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.q_variable_group_add),
+            q_variable_group_add_coeffs,
             domain_8n,
         );
 
         let s_sigma_1_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.s_sigma_1),
+            s_sigma_1_coeffs,
             domain_8n,
         );
         let s_sigma_2_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.s_sigma_2),
+            s_sigma_2_coeffs,
             domain_8n,
         );
         let s_sigma_3_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.s_sigma_3),
+            s_sigma_3_coeffs,
             domain_8n,
         );
         let s_sigma_4_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&selectors.s_sigma_4),
+            s_sigma_4_coeffs,
             domain_8n,
         );
 
         let table_1_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&preprocessed_table.t_1.2),
+            preprocessed_table_t_1_coeffs,
             domain_8n,
         );
         let table_2_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&preprocessed_table.t_2.2),
+            preprocessed_table_t_2_coeffs,
             domain_8n,
         );
         let table_3_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&preprocessed_table.t_3.2),
+            preprocessed_table_t_3_coeffs,
             domain_8n,
         );
         let table_4_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&preprocessed_table.t_4.2),
+            preprocessed_table_t_4_coeffs,
             domain_8n,
         );
+        // ==== end all
+
+        // let q_m_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_m),
+        //     domain_8n,
+        // );
+        //
+        // let q_l_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_l),
+        //     domain_8n,
+        // );
+        // let q_r_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_r),
+        //     domain_8n,
+        // );
+        // let q_o_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_o),
+        //     domain_8n,
+        // );
+        // let q_c_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_c),
+        //     domain_8n,
+        // );
+        // let q_4_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_4),
+        //     domain_8n,
+        // );
+        // let q_k_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_k),
+        //     domain_8n,
+        // );
+        // let q_arith_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_arith),
+        //     domain_8n,
+        // );
+        // let q_range_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_range),
+        //     domain_8n,
+        // );
+        // let q_logic_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_logic),
+        //     domain_8n,
+        // );
+        // let q_fixed_group_add_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_fixed_group_add),
+        //     domain_8n,
+        // );
+        // let q_variable_group_add_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.q_variable_group_add),
+        //     domain_8n,
+        // );
+        //
+        // let s_sigma_1_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.s_sigma_1),
+        //     domain_8n,
+        // );
+        // let s_sigma_2_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.s_sigma_2),
+        //     domain_8n,
+        // );
+        // let s_sigma_3_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.s_sigma_3),
+        //     domain_8n,
+        // );
+        // let s_sigma_4_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&selectors.s_sigma_4),
+        //     domain_8n,
+        // );
+        //
+        // let table_1_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&preprocessed_table.t_1.2),
+        //     domain_8n,
+        // );
+        // let table_2_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&preprocessed_table.t_2.2),
+        //     domain_8n,
+        // );
+        // let table_3_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&preprocessed_table.t_3.2),
+        //     domain_8n,
+        // );
+        // let table_4_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&preprocessed_table.t_4.2),
+        //     domain_8n,
+        // );
         // XXX: Remove this and compute it on the fly
         let linear_eval_8n = Evaluations::from_vec_and_domain(
             domain_8n.coset_fft(&[BlsScalar::zero(), BlsScalar::one()]),
@@ -340,7 +512,7 @@ impl TurboComposer {
         Error,
     > {
         // FIXME total_size requires documentation
-        // https://github.com/dusk-network/plonk/issues/580
+        // https://github.com/dusk-network/plonk/issues/580Ï
         let total_size = core::cmp::max(self.n, self.lookup_table.0.len());
 
         let domain = EvaluationDomain::new(total_size)?;
@@ -350,8 +522,6 @@ impl TurboComposer {
 
         // 1. Pad circuit to a power of two
         self.pad(domain.size as usize - self.n);
-
-        let mut kern = Some(LockedFFTKernel::new(false));
 
         let mut q_m_coeffs = self.q_m.clone();
         assert_eq!(q_m_coeffs.len() as u64, domain.size);
@@ -368,6 +538,34 @@ impl TurboComposer {
         let mut q_logic_coeffs = self.q_logic.clone();
         let mut q_fixed_group_add_coeffs = self.q_fixed_group_add.clone();
         let mut q_variable_grou_add_coeffs = self.q_variable_group_add.clone();
+
+        // let q_m_poly =
+        // Polynomial::from_coefficients_vec(domain.ifft(&self.q_m));
+        // let q_l_poly =
+        // Polynomial::from_coefficients_vec(domain.ifft(&self.q_l));
+        // let q_r_poly =
+        // Polynomial::from_coefficients_vec(domain.ifft(&self.q_r));
+        // let q_o_poly =
+        // Polynomial::from_coefficients_vec(domain.ifft(&self.q_o));
+        // let q_c_poly =
+        // Polynomial::from_coefficients_vec(domain.ifft(&self.q_c));
+        // let q_4_poly =
+        // Polynomial::from_coefficients_vec(domain.ifft(&self.q_4));
+        // let q_k_poly =
+        // Polynomial::from_coefficients_vec(domain.ifft(&self.q_k));
+        // let q_arith_poly =
+        // Polynomial::from_coefficients_vec(domain.ifft(&self.q_arith));
+        // let q_range_poly =
+        // Polynomial::from_coefficients_vec(domain.ifft(&self.q_range));
+        // let q_logic_poly =
+        // Polynomial::from_coefficients_vec(domain.ifft(&self.q_logic));
+        // let q_fixed_group_add_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&self.
+        // q_fixed_group_add)); let q_variable_group_add_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&self.
+        // q_variable_group_add));
+
+        let mut kern = Some(LockedFFTKernel::new(false));
         domain.many_ifft(
             &mut [
                 &mut q_m_coeffs,
@@ -386,7 +584,6 @@ impl TurboComposer {
             &mut kern,
         );
         drop(kern);
-
         let q_m_poly = Polynomial::from_coefficients_vec(q_m_coeffs);
         let q_l_poly = Polynomial::from_coefficients_vec(q_l_coeffs);
         let q_r_poly = Polynomial::from_coefficients_vec(q_r_coeffs);
@@ -401,6 +598,7 @@ impl TurboComposer {
             Polynomial::from_coefficients_vec(q_fixed_group_add_coeffs);
         let q_variable_group_add_poly =
             Polynomial::from_coefficients_vec(q_variable_grou_add_coeffs);
+        // assert_eq!(q_m_poly, q_m_poly_2);
 
         // 2. Compute the sigma polynomials
         let [s_sigma_1_poly, s_sigma_2_poly, s_sigma_3_poly, s_sigma_4_poly] =
