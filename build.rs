@@ -80,4 +80,6 @@ fn main() {
 }
 
 #[cfg(not(feature = "cuda"))]
-fn main() {}
+fn main() {
+    println!("cargo:rustc-env=CUDA_PLONK_FATBIN=../build.rs");
+}

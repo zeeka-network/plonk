@@ -187,6 +187,9 @@ impl TurboComposer {
         preprocessed_table_t_4_coeffs
             .resize(domain_8n.size(), BlsScalar::zero());
 
+        let mut linear_eval_8n_coeffs = vec![BlsScalar::zero(), BlsScalar::one()];
+        linear_eval_8n_coeffs.resize(domain_8n.size(), BlsScalar::zero());
+
         let mut kern = Some(LockedFFTKernel::new(false));
         domain_8n.many_coset_fft(
             &mut [
@@ -212,6 +215,8 @@ impl TurboComposer {
                 &mut preprocessed_table_t_2_coeffs,
                 &mut preprocessed_table_t_3_coeffs,
                 &mut preprocessed_table_t_4_coeffs,
+                //
+                &mut linear_eval_8n_coeffs,
             ],
             &mut kern,
         );
@@ -295,6 +300,10 @@ impl TurboComposer {
         );
         let table_4_eval_8n = Evaluations::from_vec_and_domain(
             preprocessed_table_t_4_coeffs,
+            domain_8n,
+        );
+        let linear_eval_8n = Evaluations::from_vec_and_domain(
+            linear_eval_8n_coeffs,
             domain_8n,
         );
         // ==== end all
@@ -383,10 +392,10 @@ impl TurboComposer {
         //     domain_8n,
         // );
         // XXX: Remove this and compute it on the fly
-        let linear_eval_8n = Evaluations::from_vec_and_domain(
-            domain_8n.coset_fft(&[BlsScalar::zero(), BlsScalar::one()]),
-            domain_8n,
-        );
+        // let linear_eval_8n = Evaluations::from_vec_and_domain(
+        //     domain_8n.coset_fft(&[BlsScalar::zero(), BlsScalar::one()]),
+        //     domain_8n,
+        // );
 
         // Prover Key for arithmetic circuits
         let arithmetic_prover_key = widget::arithmetic::ProverKey {

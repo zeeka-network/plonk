@@ -61,13 +61,12 @@ pub fn program(device: &Device) -> GPUResult<Program>
 }
 
 /// Returns the program for the specified [`rust_gpu_tools::device::Framework`].
-pub fn program_use_framework(
+fn program_use_framework(
     device: &Device,
     framework: Framework,
 ) -> GPUResult<Program>
 {
     match framework {
-        #[cfg(feature = "cuda")]
         Framework::Cuda => {
             info!("Using kernel on CUDA.");
             let kernel = include_bytes!(env!("CUDA_PLONK_FATBIN"));
@@ -76,7 +75,6 @@ pub fn program_use_framework(
             let program = cuda::Program::from_bytes(cuda_device, kernel)?;
             Ok(Program::Cuda(program))
         }
-        #[cfg(feature = "opencl")]
         Framework::Opencl => {
             info!("Using kernel on OpenCL.");
             let src = sources::kernel::<Limb64>();

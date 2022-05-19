@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock};
 
 use dusk_bls12_381::BlsScalar;
 use log::{error, info, warn};
-use rust_gpu_tools::{program_closures, Device, LocalBuffer, Program};
+use rust_gpu_tools::{Device, LocalBuffer, Program, program_closures};
 
 use crate::gpu::error::{GPUError, GPUResult};
 use crate::gpu::locks::PriorityLock;

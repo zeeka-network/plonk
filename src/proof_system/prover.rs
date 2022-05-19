@@ -9,8 +9,10 @@ use alloc::vec::Vec;
 use dusk_bls12_381::BlsScalar;
 use merlin::Transcript;
 use rand_core::{CryptoRng, RngCore};
+use rayon::prelude::*;
 
 use crate::gpu::LockedFFTKernel;
+use crate::multicore::default_worker;
 use crate::{
     commitment_scheme::CommitKey,
     constraint_system::{TurboComposer, Witness},
@@ -216,14 +218,15 @@ impl Prover {
         let mut transcript = self.preprocessed_transcript.clone();
 
         // PIs have to be part of the transcript
-        for pi in self.cs.to_dense_public_inputs().iter() {
+        let pis = self.cs.to_dense_public_inputs();
+        for pi in pis.iter() {
             transcript.append_scalar(b"pi", pi);
         }
 
         // We fill with zeros up to the domain size, in order to match the
         // length of the vector used by the verifier in his side in the
         // implementation
-        for _ in 0..(domain.size() - self.cs.to_dense_public_inputs().len()) {
+        for _ in 0..(domain.size() - pis.len()) {
             transcript.append_scalar(b"pi", &BlsScalar::from(0u64));
         }
 
@@ -309,25 +312,26 @@ impl Prover {
         // When q_k[i] is zero the wire value is replaced with a dummy
         // value Currently set as the first row of the public table
         // If q_k is one the wire values are preserved
+        // let worker = default_worker();
         let f_1_scalar = a_w_scalar
-            .iter()
+            .par_iter()
             .zip(&padded_q_k)
             .map(|(w, s)| {
                 w * s + (BlsScalar::one() - s) * compressed_t_multiset.0[0]
             })
             .collect::<Vec<BlsScalar>>();
         let f_2_scalar = b_w_scalar
-            .iter()
+            .par_iter()
             .zip(&padded_q_k)
             .map(|(w, s)| w * s)
             .collect::<Vec<BlsScalar>>();
         let f_3_scalar = c_w_scalar
-            .iter()
+            .par_iter()
             .zip(&padded_q_k)
             .map(|(w, s)| w * s)
             .collect::<Vec<BlsScalar>>();
         let f_4_scalar = d_w_scalar
-            .iter()
+            .par_iter()
             .zip(&padded_q_k)
             .map(|(w, s)| w * s)
             .collect::<Vec<BlsScalar>>();
@@ -350,10 +354,9 @@ impl Prover {
         // );
         let mut t_prime_coeffs = compressed_t_multiset.0.clone();
         let mut f_coeffs = compressed_f_multiset.0.clone();
-        domain.many_ifft(&mut [&mut t_prime_coeffs, &mut f_coeffs], &mut kernel);
-        let t_prime_poly = Polynomial::from_coefficients_vec(
-            t_prime_coeffs,
-        );
+        domain
+            .many_ifft(&mut [&mut t_prime_coeffs, &mut f_coeffs], &mut kernel);
+        let t_prime_poly = Polynomial::from_coefficients_vec(t_prime_coeffs);
         // new Compute long query poly
         Prover::blind_coeffs_with_inv(&mut f_coeffs, 1, rng);
         let f_poly = Polynomial::from_coefficients_vec(f_coeffs);
@@ -384,7 +387,6 @@ impl Prover {
         // Compute h polys
         let h_1_poly = Polynomial::from_coefficients_vec(h_1_coeffs);
         let h_2_poly = Polynomial::from_coefficients_vec(h_2_coeffs);
-
 
         // Compute h polys
         // let h_1_poly = Prover::blind_poly(&h_1.0, 2, &domain, rng);
@@ -446,9 +448,12 @@ impl Prover {
             &delta,
             &epsilon,
         );
-        domain.many_ifft(&mut [&mut z_2_coeffs], &mut kernel);
+        let mut p_i_coeffs = pis.clone();
+        p_i_coeffs.resize(domain.size(), BlsScalar::zero());
+        domain.many_ifft(&mut [&mut z_2_coeffs, &mut p_i_coeffs], &mut kernel);
         Prover::blind_coeffs_with_inv(&mut z_2_coeffs, 2, rng);
         let z_2_poly = Polynomial::from_coefficients_vec(z_2_coeffs);
+        let pi_poly = Polynomial::from_coefficients_vec(p_i_coeffs);
         // let z_2_poly = Prover::blind_poly(
         //     &z_2_coeffs,
         //     2,
@@ -477,9 +482,9 @@ impl Prover {
             transcript.challenge_scalar(b"lookup challenge");
 
         // Compute public inputs polynomial
-        let pi_poly = Polynomial::from_coefficients_vec(
-            domain.ifft(&self.cs.to_dense_public_inputs()),
-        );
+        // let pi_poly = Polynomial::from_coefficients_vec(
+        //     domain.ifft(&self.cs.to_dense_public_inputs()),
+        // );
 
         // Compute quotient polynomial
         let q_poly = quotient_poly::compute(
@@ -506,6 +511,7 @@ impl Prover {
                 var_base_sep_challenge,
                 lookup_sep_challenge,
             ),
+            &mut kernel,
         )?;
 
         // Split quotient polynomial into 4 degree `n` polynomials

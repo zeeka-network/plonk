@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use core::ops::{Add, Mul};
 use dusk_bls12_381::BlsScalar;
 use dusk_bytes::{DeserializableSlice, Serializable};
+use rayon::prelude::*;
 
 /// MultiSet is struct containing vectors of scalars, which
 /// individually represents either a wire value or an index
@@ -105,7 +106,6 @@ impl MultiSet {
             let index = s.position(element).ok_or(Error::ElementNotIndexed)?;
             s.0.insert(index, *element);
         }
-
         Ok(s)
     }
 
@@ -194,10 +194,10 @@ impl MultiSet {
         MultiSet(
             multisets[0]
                 .0
-                .iter()
-                .zip(multisets[1].0.iter())
-                .zip(multisets[2].0.iter())
-                .zip(multisets[3].0.iter())
+                .par_iter()
+                .zip(&multisets[1].0)
+                .zip(&multisets[2].0)
+                .zip(&multisets[3].0)
                 .map(|(((a, b), c), d)| {
                     a + b * alpha
                         + c * alpha.square()

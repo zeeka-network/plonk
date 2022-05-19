@@ -35,9 +35,9 @@ cfg-if = "1.0"
 canonical = { version = "0.7", optional = true }
 canonical_derive = { version = "0.7", optional = true }
 
-rust-gpu-tools = { git = "https://github.com/zeeka-network/rust-gpu-tools.git", rev = "6f74077", optional = true }
+rust-gpu-tools = { git = "https://github.com/zeeka-network/rust-gpu-tools.git", rev = "6f74077", default-features = false, optional = true }
 dusk-bls12_381 = { git = "https://github.com/zeeka-network/bls12_381.git", rev = "e2e0f8d", default-features = false, features = ["groups", "pairings", "endo"] }
-ec-gpu-gen = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", optional = true }
+ec-gpu-gen = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", default-features = false, optional = true }
 fs2 = { version = "0.4", optional = true }
 
 [dev-dependencies]
@@ -49,8 +49,8 @@ rand_core = "0.6.3"
 [build-dependencies]
 dusk-bls12_381 = { git = "https://github.com/zeeka-network/bls12_381.git", rev = "e2e0f8d", default-features = false, features = ["groups", "pairings", "endo"] }
 execute = "0.2.9"
-ec-gpu = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", optional = true }
-ec-gpu-gen = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", optional = true }
+ec-gpu = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", default-features = false, optional = true }
+ec-gpu-gen = { git = "https://github.com/zeeka-network/ec-gpu.git", rev = "a598adf", default-features = false, optional = true }
 hex = "0.4"
 sha2 = "0.9"
 
@@ -73,11 +73,10 @@ alloc = ["dusk-bls12_381/alloc"]
 trace = []
 trace-print = ["trace"]
 canon = ["dusk-bls12_381/canon", "dusk-jubjub/canon", "canonical", "canonical_derive"]
-multi-core = ["rayon", "num_cpus", "futures/thread-pool", "crossbeam", "dusk-bls12_381/parallel"]
-gpu = ["cuda", "fs2", "dusk-bls12_381/gpu"]
+multi-core = ["rayon", "num_cpus", "futures/thread-pool", "crossbeam"]
+gpu = ["opencl", "fs2", "dusk-bls12_381/gpu"]
 cuda = ["rust-gpu-tools/cuda", "ec-gpu-gen/cuda"]
 opencl = ["rust-gpu-tools/opencl", "ec-gpu-gen/opencl"]
-benchmark-on-paper = []
 
 [profile.release]
 panic = "abort"
@@ -92,3 +91,12 @@ overflow-checks = false
 lto = true
 incremental = false
 codegen-units = 1
+
+[profile.test]
+#opt-level = 3
+#debug = false
+#debug-assertions = false
+#overflow-checks = false
+#lto = true
+#incremental = false
+#codegen-units = 1

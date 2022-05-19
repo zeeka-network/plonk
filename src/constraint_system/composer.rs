@@ -23,6 +23,7 @@ use alloc::vec::Vec;
 
 use dusk_bls12_381::BlsScalar;
 use hashbrown::HashMap;
+use rayon::prelude::*;
 
 use crate::constraint_system::{Constraint, Selector, WiredWitness, Witness};
 use crate::permutation::Permutation;
@@ -140,11 +141,16 @@ impl TurboComposer {
     /// the sparse vector that contains the values.
     pub(crate) fn to_dense_public_inputs(&self) -> Vec<BlsScalar> {
         let mut pi = vec![BlsScalar::zero(); self.n];
-        self.public_inputs_sparse_store
-            .iter()
-            .for_each(|(pos, value)| {
-                pi[*pos] = *value;
+        pi.par_iter_mut().enumerate().for_each(|(pos, value)| {
+            self.public_inputs_sparse_store.get(&pos).map(|a| {
+               *value = *a;
             });
+        });
+        // self.public_inputs_sparse_store
+        //     .iter()
+        //     .for_each(|(pos, value)| {
+        //         pi[*pos] = *value;
+        //     });
         pi
     }
 

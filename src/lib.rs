@@ -72,16 +72,15 @@ if #[cfg(feature = "alloc")] {
 });
 
 mod fft;
-mod transcript;
 mod multicore;
+mod transcript;
 
 pub mod commitment_scheme;
 pub mod error;
+mod gpu;
 pub mod prelude;
 pub mod proof_system;
-mod gpu;
 mod test_utils;
-
 
 #[doc = include_str!("../docs/notes-intro.md")]
 pub mod notes {
@@ -93,4 +92,118 @@ pub mod notes {
     pub mod prove_verify {}
     #[doc = include_str!("../docs/notes-KZG10.md")]
     pub mod kzg10_docs {}
+}
+
+#[cfg(test)]
+mod test {
+    use std::time::Instant;
+
+    use rand_core::OsRng;
+
+    use crate::prelude::*;
+
+    #[derive(Debug, Clone, Copy)]
+    struct BenchCircuit {
+        degree: usize,
+    }
+
+    impl<T> From<T> for BenchCircuit
+    where
+        T: Into<usize>,
+    {
+        fn from(degree: T) -> Self {
+            Self {
+                degree: 1 << degree.into(),
+            }
+        }
+    }
+
+    impl Circuit for BenchCircuit {
+        const CIRCUIT_ID: [u8; 32] = [0xff; 32];
+
+        fn gadget(
+            &mut self,
+            composer: &mut TurboComposer,
+        ) -> Result<(), Error> {
+            let mut a = BlsScalar::from(2u64);
+            let mut b = BlsScalar::from(3u64);
+            let mut c;
+
+            while composer.gates() < self.padded_gates() {
+                a += BlsScalar::one();
+                b += BlsScalar::one();
+                c = a * b + a + b + BlsScalar::one();
+
+                let x = composer.append_witness(a);
+                let y = composer.append_witness(b);
+                let z = composer.append_witness(c);
+
+                let constraint = Constraint::new()
+                    .mult(1)
+                    .left(1)
+                    .right(1)
+                    .output(-BlsScalar::one())
+                    .constant(1)
+                    .a(x)
+                    .b(y)
+                    .o(z);
+
+                composer.append_gate(constraint);
+            }
+
+            Ok(())
+        }
+
+        fn public_inputs(&self) -> Vec<PublicInputValue> {
+            vec![]
+        }
+
+        fn padded_gates(&self) -> usize {
+            self.degree
+        }
+    }
+
+    fn constraint_system_prove(
+        circuit: &mut BenchCircuit,
+        pp: &PublicParameters,
+        pk: &ProverKey,
+        label: &'static [u8],
+    ) -> Proof {
+        circuit
+            .prove(pp, pk, label, &mut OsRng)
+            .expect("Failed to prove bench circuit!")
+    }
+
+
+    #[test]
+    #[cfg(feature = "big-tests")]
+    fn test_big_circuit() {
+        let max_degree = 27;
+        let degree = 26;
+
+        let rng = &mut rand_core::OsRng;
+        let label = b"dusk-network";
+        let pp = PublicParameters::setup(1 << max_degree, rng)
+            .expect("Failed to create PP");
+
+        println!("compile circuit");
+        let compile_st = Instant::now();
+        let mut circuit = BenchCircuit::from(degree as usize);
+        let (pk, vd) =
+            circuit.compile(&pp).expect("Failed to compile circuit!");
+        println!("compile took {:?}", compile_st.elapsed());
+
+        let size = circuit.padded_gates();
+        let power = (size as f64).log2() as usize;
+        println!("Prove 2^{} = {} gates", power, size);
+        let mut prove_st = Instant::now();
+        let proof = constraint_system_prove(&mut circuit, &pp, &pk, label);
+        println!("Prove took: {:?}", prove_st.elapsed());
+
+        println!("Verify 2^{} = {} gates", power, size);
+        let mut verify_st = Instant::now();
+        BenchCircuit::verify(&pp, &vd, &proof, &[], label)
+            .expect("Failed to verify bench circuit!");
+        println!("Verify took: {:?}", verify_st.elapsed());
+    }
 }

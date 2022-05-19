@@ -286,16 +286,13 @@ pub(crate) mod alloc {
                         exps.as_slice(),
                         WORKERS.as_ref().unwrap(),
                     )
-                }).expect("many coset FFT.")
+                })
+                .expect("many coset FFT.")
             } else {
                 info!("many coset fft on CPU !");
                 for coeffs in coeffs.iter_mut() {
                     assert_eq!(coeffs.len(), self.size());
-                    Self::distribute_powers(
-                        coeffs,
-                        GENERATOR,
-                        WORKERS.as_ref(),
-                    );
+                    distribute_powers(coeffs, GENERATOR, WORKERS.as_ref());
                     best_fft(
                         coeffs,
                         self.group_gen,
@@ -304,6 +301,17 @@ pub(crate) mod alloc {
                         None,
                     )
                 }
+            }
+        }
+
+        pub(crate) fn many_coset_ifft(
+            &self,
+            coeffs: &mut [&mut [BlsScalar]],
+            kern: &mut Option<gpu::LockedFFTKernel>,
+        ) {
+            self.many_ifft(coeffs, kern);
+            for coeffs in coeffs.iter_mut() {
+                distribute_powers(coeffs, self.generator_inv, WORKERS.as_ref())
             }
         }
 
