@@ -815,6 +815,7 @@ mod tests {
     use crate::commitment_scheme::PublicParameters;
     use crate::constraint_system::helper::*;
     use crate::error::Error;
+    use crate::gpu;
     use crate::proof_system::{Prover, Verifier};
 
     use super::*;
@@ -952,8 +953,10 @@ mod tests {
         // Commit Key
         let (ck, _) = public_parameters.trim(2 * 20).unwrap();
 
+        let mut kern = gpu::kernel();
+
         // Preprocess circuit
-        prover.preprocess(&ck).unwrap();
+        prover.preprocess(&ck, &mut kern).unwrap();
 
         let public_inputs = prover.cs.to_dense_public_inputs();
 
@@ -961,7 +964,7 @@ mod tests {
 
         // Compute multiple proofs
         for _ in 0..3 {
-            proofs.push(prover.prove(&ck, &mut OsRng).unwrap());
+            proofs.push(prover.prove(&ck, &mut OsRng, &mut kern).unwrap());
 
             // Add another witness instance
             dummy_gadget(10, prover.composer_mut());
@@ -978,7 +981,7 @@ mod tests {
         let (ck, vk) = public_parameters.trim(2 * 20).unwrap();
 
         // Preprocess
-        verifier.preprocess(&ck).unwrap();
+        verifier.preprocess(&ck, &mut kern).unwrap();
 
         for proof in proofs {
             assert!(verifier.verify(&proof, &vk, &public_inputs).is_ok());
@@ -1021,14 +1024,15 @@ mod tests {
         // Commit Key
         let (ck, _) = public_parameters.trim(2 * 70).unwrap();
 
+        let mut kern = gpu::kernel();
         // Preprocess circuit
-        prover.preprocess(&ck).unwrap();
+        prover.preprocess(&ck, &mut kern).unwrap();
 
         // Once the prove method is called, the public inputs are cleared
         // So pre-fetch these before calling Prove
         let public_inputs = prover.cs.to_dense_public_inputs();
 
-        prover.prove(&ck, &mut OsRng).unwrap();
+        prover.prove(&ck, &mut OsRng, &mut kern).unwrap();
         drop(public_inputs);
     }
 
@@ -1050,13 +1054,14 @@ mod tests {
         // Commit and verifier key
         let (ck, vk) = public_parameters.trim(1 << 8)?;
 
+        let mut kern = gpu::kernel();
         // Preprocess circuit
-        prover.preprocess(&ck)?;
-        verifier.preprocess(&ck)?;
+        prover.preprocess(&ck, &mut kern)?;
+        verifier.preprocess(&ck, &mut kern)?;
 
         let public_inputs = prover.cs.to_dense_public_inputs();
 
-        let proof = prover.prove(&ck, &mut OsRng)?;
+        let proof = prover.prove(&ck, &mut OsRng, &mut kern)?;
 
         assert!(verifier.verify(&proof, &vk, &public_inputs).is_ok());
 

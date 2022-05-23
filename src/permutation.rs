@@ -180,6 +180,7 @@ impl Permutation {
         &mut self,
         n: usize,
         domain: &EvaluationDomain,
+        kern: &mut Option<LockedFFTKernel>
     ) -> [Polynomial; 4] {
         // Compute sigma mappings
         let sigmas = self.compute_sigma_permutations(n);
@@ -212,7 +213,6 @@ impl Permutation {
         // let s_sigma_4_poly =
         //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_4));
 
-        let mut kern = Some(LockedFFTKernel::new(false));
         domain.many_ifft(
             &mut [
                 &mut s_sigma_1,
@@ -220,9 +220,8 @@ impl Permutation {
                 &mut s_sigma_3,
                 &mut s_sigma_4,
             ],
-            &mut kern,
+            kern,
         );
-        drop(kern);
 
         let s_sigma_1_poly = Polynomial::from_coefficients_vec(s_sigma_1);
         let s_sigma_2_poly = Polynomial::from_coefficients_vec(s_sigma_2);
@@ -1314,7 +1313,7 @@ mod test {
 
         //1. Compute the permutation polynomial using both methods
         let [s_sigma_1_poly, s_sigma_2_poly, s_sigma_3_poly, s_sigma_4_poly] =
-            perm.compute_sigma_polynomials(n, domain);
+            perm.compute_sigma_polynomials(n, domain, &mut None);
         let (z_vec, numerator_components, denominator_components) =
             compute_slow_permutation_poly(
                 domain,

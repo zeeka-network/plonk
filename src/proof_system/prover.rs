@@ -12,7 +12,6 @@ use rand_core::{CryptoRng, RngCore};
 use rayon::prelude::*;
 
 use crate::gpu::LockedFFTKernel;
-use crate::multicore::default_worker;
 use crate::{
     commitment_scheme::CommitKey,
     constraint_system::{TurboComposer, Witness},
@@ -46,13 +45,13 @@ impl Prover {
     }
 
     /// Preprocesses the underlying constraint system.
-    pub fn preprocess(&mut self, commit_key: &CommitKey) -> Result<(), Error> {
+    pub fn preprocess(&mut self, commit_key: &CommitKey, kern: &mut Option<LockedFFTKernel>) -> Result<(), Error> {
         if self.prover_key.is_some() {
             return Err(Error::CircuitAlreadyPreprocessed);
         }
         let pk = self
             .cs
-            .preprocess_prover(commit_key, &mut self.preprocessed_transcript)?;
+            .preprocess_prover(commit_key, &mut self.preprocessed_transcript, kern)?;
         self.prover_key = Some(pk);
         Ok(())
     }
@@ -157,6 +156,7 @@ impl Prover {
     /// if hiding degree = 1: (b2*X^(n+1) + b1*X^n - b2*X - b1) + w_vec
     /// if hiding degree = 2: (b3*X^(n+2) + b2*X^(n+1) + b1*X^n - b3*X^2 - b2*X
     /// - b1) + w_vec
+    #[allow(dead_code)]
     pub(crate) fn blind_poly<R: RngCore + CryptoRng>(
         w_vec: &Vec<BlsScalar>,
         hiding_degree: usize,
@@ -205,6 +205,7 @@ impl Prover {
         commit_key: &CommitKey,
         prover_key: &ProverKey,
         rng: &mut R,
+        kern: &mut Option<LockedFFTKernel>
     ) -> Result<Proof, Error> {
         // make sure the domain is big enough to handle the circuit as well as
         // the lookup table
@@ -246,7 +247,6 @@ impl Prover {
         // Wires are now in evaluation form, convert them to coefficients so
         // that we may commit to them
         // init kern
-        let mut kernel = Some(LockedFFTKernel::new(false));
 
         let mut a_w_scalar_coeffs = a_w_scalar.clone();
         let mut b_w_scalar_coeffs = b_w_scalar.clone();
@@ -259,7 +259,7 @@ impl Prover {
                 &mut c_w_scalar_coeffs,
                 &mut d_w_scalar_coeffs,
             ],
-            &mut kernel,
+            kern,
         );
         Prover::blind_coeffs_with_inv(&mut a_w_scalar_coeffs, 1, rng);
         let a_w_poly = Polynomial::from_coefficients_vec(a_w_scalar_coeffs);
@@ -355,7 +355,7 @@ impl Prover {
         let mut t_prime_coeffs = compressed_t_multiset.0.clone();
         let mut f_coeffs = compressed_f_multiset.0.clone();
         domain
-            .many_ifft(&mut [&mut t_prime_coeffs, &mut f_coeffs], &mut kernel);
+            .many_ifft(&mut [&mut t_prime_coeffs, &mut f_coeffs], kern);
         let t_prime_poly = Polynomial::from_coefficients_vec(t_prime_coeffs);
         // new Compute long query poly
         Prover::blind_coeffs_with_inv(&mut f_coeffs, 1, rng);
@@ -381,7 +381,7 @@ impl Prover {
 
         let mut h_1_coeffs = h_1.0.clone();
         let mut h_2_coeffs = h_2.0.clone();
-        domain.many_ifft(&mut [&mut h_1_coeffs, &mut h_2_coeffs], &mut kernel);
+        domain.many_ifft(&mut [&mut h_1_coeffs, &mut h_2_coeffs], kern);
         Prover::blind_coeffs_with_inv(&mut h_1_coeffs, 2, rng);
         Prover::blind_coeffs_with_inv(&mut h_2_coeffs, 1, rng);
         // Compute h polys
@@ -419,9 +419,9 @@ impl Prover {
                 &prover_key.permutation.s_sigma_3.0,
                 &prover_key.permutation.s_sigma_4.0,
             ],
-            &mut kernel,
+            kern,
         );
-        domain.many_ifft(&mut [&mut z_1_coeffs], &mut kernel);
+        domain.many_ifft(&mut [&mut z_1_coeffs], kern);
         Prover::blind_coeffs_with_inv(&mut z_1_coeffs, 2, rng);
         let z_1_poly = Polynomial::from_coefficients_vec(z_1_coeffs);
 
@@ -450,7 +450,7 @@ impl Prover {
         );
         let mut p_i_coeffs = pis.clone();
         p_i_coeffs.resize(domain.size(), BlsScalar::zero());
-        domain.many_ifft(&mut [&mut z_2_coeffs, &mut p_i_coeffs], &mut kernel);
+        domain.many_ifft(&mut [&mut z_2_coeffs, &mut p_i_coeffs], kern);
         Prover::blind_coeffs_with_inv(&mut z_2_coeffs, 2, rng);
         let z_2_poly = Polynomial::from_coefficients_vec(z_2_coeffs);
         let pi_poly = Polynomial::from_coefficients_vec(p_i_coeffs);
@@ -511,7 +511,7 @@ impl Prover {
                 var_base_sep_challenge,
                 lookup_sep_challenge,
             ),
-            &mut kernel,
+            kern,
         )?;
 
         // Split quotient polynomial into 4 degree `n` polynomials
@@ -700,7 +700,9 @@ impl Prover {
         &mut self,
         commit_key: &CommitKey,
         rng: &mut R,
+        kern: &mut Option<LockedFFTKernel>
     ) -> Result<Proof, Error> {
+
         let prover_key: &ProverKey;
 
         if self.prover_key.is_none() {
@@ -708,6 +710,7 @@ impl Prover {
             let prover_key = self.cs.preprocess_prover(
                 commit_key,
                 &mut self.preprocessed_transcript,
+                kern,
             )?;
             // Store preprocessed circuit and transcript in the Prover
             self.prover_key = Some(prover_key);
@@ -716,7 +719,7 @@ impl Prover {
         prover_key = self.prover_key.as_ref().unwrap();
 
         let proof =
-            self.prove_with_preprocessed(commit_key, prover_key, rng)?;
+            self.prove_with_preprocessed(commit_key, prover_key, rng, kern)?;
 
         // Clear witness and reset composer variables
         self.clear_witness();

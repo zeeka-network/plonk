@@ -16,10 +16,6 @@ lazy_static! {
     pub static ref WORKERS: Option<Workers> = Some(Workers::new());
 }
 
-pub fn default_worker<'a>() -> &'a Workers {
-    WORKERS.as_ref().unwrap()
-}
-
 #[derive(Clone)]
 pub struct Workers {
     pub(crate) cpus: usize,

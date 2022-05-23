@@ -11,6 +11,7 @@
 //! roots to be the powers of a 2^n root of unity in the field.
 //! This allows us to perform polynomial operations in O(n)
 //! by performing an O(n log n) FFT over such a domain.
+#![allow(dead_code)]
 
 use dusk_bls12_381::BlsScalar;
 use dusk_bytes::{DeserializableSlice, Serializable};

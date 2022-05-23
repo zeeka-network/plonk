@@ -74,7 +74,7 @@ trace = []
 trace-print = ["trace"]
 canon = ["dusk-bls12_381/canon", "dusk-jubjub/canon", "canonical", "canonical_derive"]
 multi-core = ["rayon", "num_cpus", "futures/thread-pool", "crossbeam"]
-gpu = ["opencl", "fs2", "dusk-bls12_381/gpu"]
+gpu = ["cuda", "fs2", "dusk-bls12_381/gpu"]
 cuda = ["rust-gpu-tools/cuda", "ec-gpu-gen/cuda"]
 opencl = ["rust-gpu-tools/opencl", "ec-gpu-gen/opencl"]
 
@@ -91,12 +91,3 @@ overflow-checks = false
 lto = true
 incremental = false
 codegen-units = 1
-
-[profile.test]
-#opt-level = 3
-#debug = false
-#debug-assertions = false
-#overflow-checks = false
-#lto = true
-#incremental = false
-#codegen-units = 1

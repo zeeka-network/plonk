@@ -11,10 +11,6 @@ use crate::gpu::locks::PriorityLock;
 use crate::gpu::program;
 use crate::multicore::Workers;
 
-const DISTRIBUTE_POWERS_DEGREE: u32 = 3;
-
-const LOCAL_WORK_SIZE: usize = 256;
-
 const LOG2_MAX_ELEMENTS: usize = 32; // At most 2^32 elements is supported.
 const MAX_LOG2_RADIX: u32 = 8; // Radix256
 const MAX_LOG2_LOCAL_WORK_SIZE: u32 = 7; // 128
@@ -137,123 +133,6 @@ impl<'a> SingleFftKernel<'a> {
         });
 
         self.program.run(closures, input)
-    }
-
-    pub fn coset_fft(
-        &mut self,
-        coeffs: &mut [BlsScalar],
-        omega: &BlsScalar,
-        gen: BlsScalar,
-        log_n: u32,
-    ) -> GPUResult<()> {
-        let closures =
-            program_closures!(|program,
-                               params: (&mut [BlsScalar], &BlsScalar, u32)|
-             -> GPUResult<()> {
-                if let Some(maybe_abort) = &self.maybe_abort {
-                    if maybe_abort() {
-                        return Err(GPUError::Aborted);
-                    }
-                }
-                let (input, omega, log_n) = params;
-
-                let n = 1u32 << log_n;
-                let mut src_buffer =
-                    unsafe { program.create_buffer::<BlsScalar>(n as usize)? };
-                let max_deg: u32 = cmp::min(DISTRIBUTE_POWERS_DEGREE, log_n);
-                let kernel = program.create_kernel(
-                    "distribute_powers",
-                    ((n >> max_deg) as usize) / LOCAL_WORK_SIZE,
-                    LOCAL_WORK_SIZE,
-                )?;
-                kernel
-                    .arg(&src_buffer)
-                    .arg(&n)
-                    .arg(&max_deg)
-                    .arg(unsafe {
-                        std::mem::transmute::<&BlsScalar, &[u64; 4]>(&gen)
-                    })
-                    .run()?;
-
-
-                let mut dst_buffer =
-                    unsafe { program.create_buffer::<BlsScalar>(n as usize)? };
-                // The precalculated values pq` and `omegas` are valid for radix
-                // degrees up to `max_deg`
-                let max_deg = cmp::min(MAX_LOG2_RADIX, log_n);
-
-                // Precalculate:
-                // [omega^(0/(2^(deg-1))), omega^(1/(2^(deg-1))), ...,
-                // omega^((2^(deg-1)-1)/(2^(deg-1)))]
-                let mut pq = vec![BlsScalar::zero(); 1 << max_deg >> 1];
-                let twiddle =
-                    omega.pow_vartime(&[(n >> max_deg) as u64, 0, 0, 0]);
-                pq[0] = BlsScalar::one();
-                if max_deg > 1 {
-                    pq[1] = twiddle;
-                    for i in 2..(1 << max_deg >> 1) {
-                        pq[i] = pq[i - 1];
-                        pq[i].mul_assign(&twiddle);
-                    }
-                }
-                let pq_buffer = program.create_buffer_from_slice(&pq)?;
-
-                // Precalculate [omega, omega^2, omega^4, omega^8, ...,
-                // omega^(2^31)]
-                let mut omegas = vec![BlsScalar::zero(); 32];
-                omegas[0] = *omega;
-                let exp_2 = [2u64, 0, 0, 0];
-                for i in 1..LOG2_MAX_ELEMENTS {
-                    omegas[i] = omegas[i - 1].pow_vartime(&exp_2);
-                }
-                let omegas_buffer =
-                    program.create_buffer_from_slice(&omegas)?;
-
-                program.write_from_buffer(&mut src_buffer, &*input)?;
-                // Specifies log2 of `p`, (http://www.bealto.com/gpu-fft_group-1.html)
-                let mut log_p = 0u32;
-                // Each iteration performs a FFT round
-                while log_p < log_n {
-                    if let Some(maybe_abort) = &self.maybe_abort {
-                        if maybe_abort() {
-                            return Err(GPUError::Aborted);
-                        }
-                    }
-
-                    // 1=>radix2, 2=>radix4, 3=>radix8, ...
-                    let deg = cmp::min(max_deg, log_n - log_p);
-
-                    let n = 1u32 << log_n;
-                    let local_work_size =
-                        1 << cmp::min(deg - 1, MAX_LOG2_LOCAL_WORK_SIZE);
-                    let global_work_size = n >> deg;
-                    let kernel = program.create_kernel(
-                        "radix_fft",
-                        global_work_size as usize,
-                        local_work_size as usize,
-                    )?;
-                    kernel
-                        .arg(&src_buffer)
-                        .arg(&dst_buffer)
-                        .arg(&pq_buffer)
-                        .arg(&omegas_buffer)
-                        .arg(&LocalBuffer::<BlsScalar>::new(1 << deg))
-                        .arg(&n)
-                        .arg(&log_p)
-                        .arg(&deg)
-                        .arg(&max_deg)
-                        .run()?;
-
-                    log_p += deg;
-                    std::mem::swap(&mut src_buffer, &mut dst_buffer);
-                }
-
-                program.read_into_buffer(&src_buffer, input)?;
-
-                Ok(())
-            });
-        self.program.run(closures, (coeffs, omega, log_n))?;
-        Ok(())
     }
 }
 

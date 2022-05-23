@@ -5,21 +5,31 @@
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
 use alloc::vec::Vec;
+// while we do not have batch inversion for scalars
+use core::ops::MulAssign;
+
 use dusk_bls12_381::{
     BlsScalar, G1Affine, G1Projective, G2Affine, G2Projective,
 };
 use rand_core::{CryptoRng, RngCore};
+use rayon::prelude::*;
 
 /// Returns a vector of BlsScalars of increasing powers of x from x^0 to x^d.
 pub(crate) fn powers_of(
     scalar: &BlsScalar,
     max_degree: usize,
 ) -> Vec<BlsScalar> {
-    let mut powers = Vec::with_capacity(max_degree + 1);
-    powers.push(BlsScalar::one());
-    for i in 1..=max_degree {
-        powers.push(powers[i - 1] * scalar);
-    }
+    let mut powers = vec![BlsScalar::zero(); max_degree + 1];
+    powers[0] = BlsScalar::one();
+    powers[1..]
+        .par_iter_mut()
+        .enumerate()
+        .for_each(|(idx, value)| {
+            *value = scalar.pow_vartime(&[(idx + 1) as u64, 0, 0, 0]);
+        });
+    // for i in 1..=max_degree {
+    //     powers.push(powers[i - 1] * scalar);
+    // }
     powers
 }
 
@@ -48,11 +58,8 @@ pub(crate) fn slow_multiscalar_mul_single_base(
     scalars: &[BlsScalar],
     base: G1Projective,
 ) -> Vec<G1Projective> {
-    scalars.iter().map(|s| base * *s).collect()
+    scalars.par_iter().map(|s| base * *s).collect()
 }
-
-// while we do not have batch inversion for scalars
-use core::ops::MulAssign;
 
 pub fn batch_inversion(v: &mut [BlsScalar]) {
     // Montgomery’s Trick and Fast Implementation of Masked AES
@@ -89,6 +96,7 @@ pub fn batch_inversion(v: &mut [BlsScalar]) {
 #[cfg(test)]
 mod test {
     use super::*;
+
     #[test]
     fn test_batch_inversion() {
         let one = BlsScalar::from(1);

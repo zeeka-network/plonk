@@ -3,8 +3,6 @@ pub(crate) use self::error::*;
 pub use self::fft::*;
 #[cfg(any(feature = "cuda", feature = "opencl"))]
 pub use self::locks::*;
-#[cfg(any(feature = "cuda", feature = "opencl"))]
-pub(crate) use self::sources::*;
 
 mod program;
 
@@ -16,3 +14,13 @@ mod error;
 mod fft;
 #[cfg(any(feature = "cuda", feature = "opencl"))]
 mod sources;
+
+#[cfg(any(feature = "cuda", feature = "opencl"))]
+pub fn kernel<'a>() -> Option<LockedFFTKernel<'a>> {
+    Some(LockedFFTKernel::new(false))
+}
+
+#[cfg(not(all(feature = "cuda", feature = "opencl")))]
+pub fn kernel<'a>() -> Option<LockedFFTKernel<'a>> {
+    None
+}

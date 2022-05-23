@@ -7,6 +7,7 @@
 use crate::commitment_scheme::{CommitKey, Commitment};
 use crate::error::Error;
 use crate::fft::{EvaluationDomain, Polynomial};
+use crate::gpu::LockedFFTKernel;
 use crate::plonkup::{LookupTable, MultiSet};
 
 /// This table will be the preprocessed version of the
@@ -50,6 +51,7 @@ impl PreprocessedLookupTable {
         table: &LookupTable,
         commit_key: &CommitKey,
         n: u32,
+        kern: &mut Option<LockedFFTKernel>,
     ) -> Result<Self, Error> {
         let domain: EvaluationDomain =
             EvaluationDomain::new(n as usize).unwrap();
@@ -64,11 +66,29 @@ impl PreprocessedLookupTable {
         t_2.pad(n);
         t_3.pad(n);
         t_4.pad(n);
+        let mut t_1_coeffs = t_1.0.clone();
+        let mut t_2_coeffs = t_2.0.clone();
+        let mut t_3_coeffs = t_3.0.clone();
+        let mut t_4_coeffs = t_4.0.clone();
+        domain.many_ifft(
+            &mut [
+                &mut t_1_coeffs,
+                &mut t_2_coeffs,
+                &mut t_3_coeffs,
+                &mut t_4_coeffs,
+            ],
+            kern,
+        );
 
-        let t_1_poly = t_1.to_polynomial(&domain);
-        let t_2_poly = t_2.to_polynomial(&domain);
-        let t_3_poly = t_3.to_polynomial(&domain);
-        let t_4_poly = t_4.to_polynomial(&domain);
+        let t_1_poly = Polynomial::from_coefficients_vec(t_1_coeffs);
+        let t_2_poly = Polynomial::from_coefficients_vec(t_2_coeffs);
+        let t_3_poly = Polynomial::from_coefficients_vec(t_3_coeffs);
+        let t_4_poly = Polynomial::from_coefficients_vec(t_4_coeffs);
+
+        // let t_1_poly = t_1.to_polynomial(&domain);
+        // let t_2_poly = t_2.to_polynomial(&domain);
+        // let t_3_poly = t_3.to_polynomial(&domain);
+        // let t_4_poly = t_4.to_polynomial(&domain);
 
         let t_1_commit = commit_key.commit(&t_1_poly)?;
         let t_2_commit = commit_key.commit(&t_2_poly)?;

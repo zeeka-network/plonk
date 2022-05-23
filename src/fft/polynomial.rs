@@ -8,14 +8,17 @@
 //! Where each coefficient is represented using a position in the underlying
 //! vector.
 #![allow(dead_code)]
+
 use alloc::vec::Vec;
 use core::iter::Sum;
 use core::ops::{Add, AddAssign, Deref, DerefMut, Mul, Neg, Sub, SubAssign};
 
 use dusk_bls12_381::BlsScalar;
 use dusk_bytes::{DeserializableSlice, Serializable};
+use rayon::prelude::*;
 
 use crate::error::Error;
+use crate::gpu::LockedFFTKernel;
 use crate::util;
 
 use super::{EvaluationDomain, Evaluations};
@@ -50,7 +53,10 @@ impl Polynomial {
     /// Checks if the given polynomial is zero.
     pub(crate) fn is_zero(&self) -> bool {
         self.coeffs.is_empty()
-            || self.coeffs.iter().all(|coeff| coeff == &BlsScalar::zero())
+            || self
+                .coeffs
+                .par_iter()
+                .all(|coeff| coeff == &BlsScalar::zero())
     }
 
     /// Constructs a new polynomial from a list of coefficients.
@@ -345,31 +351,55 @@ impl Polynomial {
     }
 }
 
-/// Performs O(nlogn) multiplication of polynomials if F is smooth.
-impl<'a, 'b> Mul<&'a Polynomial> for &'b Polynomial {
-    type Output = Polynomial;
-
-    #[inline]
-    fn mul(self, other: &'a Polynomial) -> Polynomial {
-        if self.is_zero() || other.is_zero() {
-            Polynomial::zero()
-        } else {
-            let domain =
-                EvaluationDomain::new(self.coeffs.len() + other.coeffs.len())
-                    .expect("field is not smooth enough to construct domain");
-            let mut self_evals = Evaluations::from_vec_and_domain(
-                domain.fft(&self.coeffs),
-                domain,
-            );
-            let other_evals = Evaluations::from_vec_and_domain(
-                domain.fft(&other.coeffs),
-                domain,
-            );
-            self_evals *= &other_evals;
-            self_evals.interpolate()
+impl<'a> Polynomial {
+    pub fn mul<'b>(
+        &'a self,
+        rhs: &'b Polynomial,
+        kern: &mut Option<LockedFFTKernel>,
+    ) -> Polynomial {
+        if self.is_zero() || rhs.is_zero() {
+            return Polynomial::zero()
         }
+        let domain =
+            EvaluationDomain::new(self.coeffs.len() + rhs.coeffs.len())
+                .expect("field is not smooth enough to construct domain");
+        let mut self_evals = self.coeffs.clone();
+        self_evals.resize(domain.size(), BlsScalar::zero());
+        let mut rhs_evals = rhs.coeffs.clone();
+        rhs_evals.resize(domain.size(), BlsScalar::zero());
+        domain.many_fft(&mut [&mut self_evals, &mut rhs_evals], kern);
+        let mut lhs = Evaluations::from_vec_and_domain(self_evals, domain);
+        let rhs = Evaluations::from_vec_and_domain(rhs_evals, domain);
+        lhs *= &rhs;
+        lhs.interpolate()
     }
 }
+
+/// Performs O(nlogn) multiplication of polynomials if F is smooth.
+// impl<'a, 'b> Mul<&'a Polynomial> for &'b Polynomial {
+//     type Output = Polynomial;
+//
+//     #[inline]
+//     fn mul(self, other: &'a Polynomial) -> Polynomial {
+//         if self.is_zero() || other.is_zero() {
+//             Polynomial::zero()
+//         } else {
+//             let domain =
+//                 EvaluationDomain::new(self.coeffs.len() + other.coeffs.len())
+//                     .expect("field is not smooth enough to construct
+// domain");             let mut self_evals = Evaluations::from_vec_and_domain(
+//                 domain.fft(&self.coeffs),
+//                 domain,
+//             );
+//             let other_evals = Evaluations::from_vec_and_domain(
+//                 domain.fft(&other.coeffs),
+//                 domain,
+//             );
+//             self_evals *= &other_evals;
+//             self_evals.interpolate()
+//         }
+//     }
+// }
 
 impl<'a, 'b> Mul<&'a BlsScalar> for &'b Polynomial {
     type Output = Polynomial;

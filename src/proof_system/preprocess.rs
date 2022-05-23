@@ -15,7 +15,7 @@ use crate::error::Error;
 use crate::fft::{EvaluationDomain, Evaluations, Polynomial};
 use crate::gpu::LockedFFTKernel;
 use crate::plonkup::PreprocessedLookupTable;
-use crate::proof_system::{ProverKey, widget};
+use crate::proof_system::{widget, ProverKey};
 
 /// Struct that contains all selector and permutation [`Polynomials`]s
 pub(crate) struct Polynomials {
@@ -118,9 +118,10 @@ impl TurboComposer {
         &mut self,
         commit_key: &CommitKey,
         transcript: &mut Transcript,
+        kern: &mut Option<LockedFFTKernel>,
     ) -> Result<ProverKey, Error> {
         let (_, selectors, preprocessed_table, domain) =
-            self.preprocess_shared(commit_key, transcript)?;
+            self.preprocess_shared(commit_key, transcript, kern)?;
 
         // The polynomial needs an evaluation domain of 4n.
         // Plus, adding the blinding factors translates to
@@ -187,10 +188,10 @@ impl TurboComposer {
         preprocessed_table_t_4_coeffs
             .resize(domain_8n.size(), BlsScalar::zero());
 
-        let mut linear_eval_8n_coeffs = vec![BlsScalar::zero(), BlsScalar::one()];
+        let mut linear_eval_8n_coeffs =
+            vec![BlsScalar::zero(), BlsScalar::one()];
         linear_eval_8n_coeffs.resize(domain_8n.size(), BlsScalar::zero());
 
-        let mut kern = Some(LockedFFTKernel::new(false));
         domain_8n.many_coset_fft(
             &mut [
                 &mut q_m_coeffs,
@@ -218,48 +219,29 @@ impl TurboComposer {
                 //
                 &mut linear_eval_8n_coeffs,
             ],
-            &mut kern,
+            kern,
         );
-        drop(kern);
 
         let q_m_eval_8n =
             Evaluations::from_vec_and_domain(q_m_coeffs, domain_8n);
-        let q_l_eval_8n = Evaluations::from_vec_and_domain(
-            q_l_coeffs,
-            domain_8n,
-        );
-        let q_r_eval_8n = Evaluations::from_vec_and_domain(
-            q_r_coeffs,
-            domain_8n,
-        );
-        let q_o_eval_8n = Evaluations::from_vec_and_domain(
-            q_o_coeffs,
-            domain_8n,
-        );
-        let q_c_eval_8n = Evaluations::from_vec_and_domain(
-            q_c_coeffs,
-            domain_8n,
-        );
-        let q_4_eval_8n = Evaluations::from_vec_and_domain(
-            q_4_coeffs,
-            domain_8n,
-        );
-        let q_k_eval_8n = Evaluations::from_vec_and_domain(
-            q_k_coeffs,
-            domain_8n,
-        );
-        let q_arith_eval_8n = Evaluations::from_vec_and_domain(
-            q_arith_coeffs,
-            domain_8n,
-        );
-        let q_range_eval_8n = Evaluations::from_vec_and_domain(
-            q_range_coeffs,
-            domain_8n,
-        );
-        let q_logic_eval_8n = Evaluations::from_vec_and_domain(
-            q_logic_coeffs,
-            domain_8n,
-        );
+        let q_l_eval_8n =
+            Evaluations::from_vec_and_domain(q_l_coeffs, domain_8n);
+        let q_r_eval_8n =
+            Evaluations::from_vec_and_domain(q_r_coeffs, domain_8n);
+        let q_o_eval_8n =
+            Evaluations::from_vec_and_domain(q_o_coeffs, domain_8n);
+        let q_c_eval_8n =
+            Evaluations::from_vec_and_domain(q_c_coeffs, domain_8n);
+        let q_4_eval_8n =
+            Evaluations::from_vec_and_domain(q_4_coeffs, domain_8n);
+        let q_k_eval_8n =
+            Evaluations::from_vec_and_domain(q_k_coeffs, domain_8n);
+        let q_arith_eval_8n =
+            Evaluations::from_vec_and_domain(q_arith_coeffs, domain_8n);
+        let q_range_eval_8n =
+            Evaluations::from_vec_and_domain(q_range_coeffs, domain_8n);
+        let q_logic_eval_8n =
+            Evaluations::from_vec_and_domain(q_logic_coeffs, domain_8n);
         let q_fixed_group_add_eval_8n = Evaluations::from_vec_and_domain(
             q_fixed_group_add_coeffs,
             domain_8n,
@@ -269,22 +251,14 @@ impl TurboComposer {
             domain_8n,
         );
 
-        let s_sigma_1_eval_8n = Evaluations::from_vec_and_domain(
-            s_sigma_1_coeffs,
-            domain_8n,
-        );
-        let s_sigma_2_eval_8n = Evaluations::from_vec_and_domain(
-            s_sigma_2_coeffs,
-            domain_8n,
-        );
-        let s_sigma_3_eval_8n = Evaluations::from_vec_and_domain(
-            s_sigma_3_coeffs,
-            domain_8n,
-        );
-        let s_sigma_4_eval_8n = Evaluations::from_vec_and_domain(
-            s_sigma_4_coeffs,
-            domain_8n,
-        );
+        let s_sigma_1_eval_8n =
+            Evaluations::from_vec_and_domain(s_sigma_1_coeffs, domain_8n);
+        let s_sigma_2_eval_8n =
+            Evaluations::from_vec_and_domain(s_sigma_2_coeffs, domain_8n);
+        let s_sigma_3_eval_8n =
+            Evaluations::from_vec_and_domain(s_sigma_3_coeffs, domain_8n);
+        let s_sigma_4_eval_8n =
+            Evaluations::from_vec_and_domain(s_sigma_4_coeffs, domain_8n);
 
         let table_1_eval_8n = Evaluations::from_vec_and_domain(
             preprocessed_table_t_1_coeffs,
@@ -302,10 +276,8 @@ impl TurboComposer {
             preprocessed_table_t_4_coeffs,
             domain_8n,
         );
-        let linear_eval_8n = Evaluations::from_vec_and_domain(
-            linear_eval_8n_coeffs,
-            domain_8n,
-        );
+        let linear_eval_8n =
+            Evaluations::from_vec_and_domain(linear_eval_8n_coeffs, domain_8n);
         // ==== end all
 
         // let q_m_eval_8n = Evaluations::from_vec_and_domain(
@@ -497,9 +469,10 @@ impl TurboComposer {
         &mut self,
         commit_key: &CommitKey,
         transcript: &mut Transcript,
+        kern: &mut Option<LockedFFTKernel>
     ) -> Result<widget::VerifierKey, Error> {
         let (verifier_key, _, _, _) =
-            self.preprocess_shared(commit_key, transcript)?;
+            self.preprocess_shared(commit_key, transcript, kern)?;
         Ok(verifier_key)
     }
 
@@ -511,6 +484,7 @@ impl TurboComposer {
         &mut self,
         commit_key: &CommitKey,
         transcript: &mut Transcript,
+        kern: &mut Option<LockedFFTKernel>,
     ) -> Result<
         (
             widget::VerifierKey,
@@ -574,7 +548,6 @@ impl TurboComposer {
         //     Polynomial::from_coefficients_vec(domain.ifft(&self.
         // q_variable_group_add));
 
-        let mut kern = Some(LockedFFTKernel::new(false));
         domain.many_ifft(
             &mut [
                 &mut q_m_coeffs,
@@ -590,9 +563,8 @@ impl TurboComposer {
                 &mut q_fixed_group_add_coeffs,
                 &mut q_variable_grou_add_coeffs,
             ],
-            &mut kern,
+            kern,
         );
-        drop(kern);
         let q_m_poly = Polynomial::from_coefficients_vec(q_m_coeffs);
         let q_l_poly = Polynomial::from_coefficients_vec(q_l_coeffs);
         let q_r_poly = Polynomial::from_coefficients_vec(q_r_coeffs);
@@ -611,7 +583,7 @@ impl TurboComposer {
 
         // 2. Compute the sigma polynomials
         let [s_sigma_1_poly, s_sigma_2_poly, s_sigma_3_poly, s_sigma_4_poly] =
-            self.perm.compute_sigma_polynomials(self.n, &domain);
+            self.perm.compute_sigma_polynomials(self.n, &domain, kern);
 
         // ==== 5n Start ====
         let q_m_poly_commit = commit_key.commit(&q_m_poly).unwrap_or_default();
@@ -647,6 +619,7 @@ impl TurboComposer {
             &self.lookup_table,
             commit_key,
             domain.size() as u32,
+            kern,
         )?;
 
         // Verifier Key for arithmetic circuits
