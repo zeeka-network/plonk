@@ -4,18 +4,21 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
-use crate::constraint_system::{WireData, Witness};
-use crate::fft::{EvaluationDomain, Polynomial};
 use alloc::vec::Vec;
-use constants::{K1, K2, K3};
+
 use dusk_bls12_381::BlsScalar;
 use hashbrown::HashMap;
 use itertools::izip;
-
-pub(crate) mod constants;
-
 #[cfg(feature = "std")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+
+use constants::{K1, K2, K3};
+
+use crate::constraint_system::{WireData, Witness};
+use crate::fft::{EvaluationDomain, Polynomial};
+use crate::gpu::LockedFFTKernel;
+
+pub(crate) mod constants;
 
 /// Permutation provides the necessary state information and functions
 /// to create the permutation polynomial. In the literature, Z(X) is the
@@ -177,6 +180,7 @@ impl Permutation {
         &mut self,
         n: usize,
         domain: &EvaluationDomain,
+        kern: &mut Option<LockedFFTKernel>
     ) -> [Polynomial; 4] {
         // Compute sigma mappings
         let sigmas = self.compute_sigma_permutations(n);
@@ -187,19 +191,42 @@ impl Permutation {
         assert_eq!(sigmas[3].len(), n);
 
         // define the sigma permutations using two non quadratic residues
-        let s_sigma_1 = self.compute_permutation_lagrange(&sigmas[0], domain);
-        let s_sigma_2 = self.compute_permutation_lagrange(&sigmas[1], domain);
-        let s_sigma_3 = self.compute_permutation_lagrange(&sigmas[2], domain);
-        let s_sigma_4 = self.compute_permutation_lagrange(&sigmas[3], domain);
+        let mut s_sigma_1 =
+            self.compute_permutation_lagrange(&sigmas[0], domain);
+        let mut s_sigma_2 =
+            self.compute_permutation_lagrange(&sigmas[1], domain);
+        let mut s_sigma_3 =
+            self.compute_permutation_lagrange(&sigmas[2], domain);
+        let mut s_sigma_4 =
+            self.compute_permutation_lagrange(&sigmas[3], domain);
+        s_sigma_1.resize(domain.size(), BlsScalar::zero());
+        s_sigma_2.resize(domain.size(), BlsScalar::zero());
+        s_sigma_3.resize(domain.size(), BlsScalar::zero());
+        s_sigma_4.resize(domain.size(), BlsScalar::zero());
 
-        let s_sigma_1_poly =
-            Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_1));
-        let s_sigma_2_poly =
-            Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_2));
-        let s_sigma_3_poly =
-            Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_3));
-        let s_sigma_4_poly =
-            Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_4));
+        // let s_sigma_1_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_1));
+        // let s_sigma_2_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_2));
+        // let s_sigma_3_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_3));
+        // let s_sigma_4_poly =
+        //     Polynomial::from_coefficients_vec(domain.ifft(&s_sigma_4));
+
+        domain.many_ifft(
+            &mut [
+                &mut s_sigma_1,
+                &mut s_sigma_2,
+                &mut s_sigma_3,
+                &mut s_sigma_4,
+            ],
+            kern,
+        );
+
+        let s_sigma_1_poly = Polynomial::from_coefficients_vec(s_sigma_1);
+        let s_sigma_2_poly = Polynomial::from_coefficients_vec(s_sigma_2);
+        let s_sigma_3_poly = Polynomial::from_coefficients_vec(s_sigma_3);
+        let s_sigma_4_poly = Polynomial::from_coefficients_vec(s_sigma_4);
 
         [
             s_sigma_1_poly,
@@ -219,6 +246,7 @@ impl Permutation {
         beta: &BlsScalar,
         gamma: &BlsScalar,
         sigma_polys: [&Polynomial; 4],
+        kern: &mut Option<LockedFFTKernel>,
     ) -> Vec<BlsScalar> {
         let n = domain.size();
 
@@ -231,13 +259,27 @@ impl Permutation {
         let gatewise_wires = izip!(wires[0], wires[1], wires[2], wires[3])
             .map(|(w0, w1, w2, w3)| vec![w0, w1, w2, w3]);
 
-        let gatewise_sigmas: Vec<Vec<BlsScalar>> =
-            sigma_polys.iter().map(|sigma| domain.fft(sigma)).collect();
+        // let gatewise_sigmas: Vec<Vec<BlsScalar>> =
+        //     sigma_polys.iter().map(|sigma| domain.fft(sigma)).collect();
+        let mut gatewise_sigmas_0 = sigma_polys[0].coeffs.clone();
+        let mut gatewise_sigmas_1 = sigma_polys[1].coeffs.clone();
+        let mut gatewise_sigmas_2 = sigma_polys[2].coeffs.clone();
+        let mut gatewise_sigmas_3 = sigma_polys[3].coeffs.clone();
+        domain.many_fft(
+            &mut [
+                &mut gatewise_sigmas_0,
+                &mut gatewise_sigmas_1,
+                &mut gatewise_sigmas_2,
+                &mut gatewise_sigmas_3,
+            ],
+            kern,
+        );
+
         let gatewise_sigmas = izip!(
-            &gatewise_sigmas[0],
-            &gatewise_sigmas[1],
-            &gatewise_sigmas[2],
-            &gatewise_sigmas[3]
+            &gatewise_sigmas_0,
+            &gatewise_sigmas_1,
+            &gatewise_sigmas_2,
+            &gatewise_sigmas_3,
         )
         .map(|(s0, s1, s2, s3)| vec![s0, s1, s2, s3]);
 
@@ -410,13 +452,15 @@ fn plonkup_denominator_irreducible(
 #[cfg(feature = "std")]
 #[cfg(test)]
 mod test {
-    use super::*;
+    use dusk_bls12_381::BlsScalar;
+    use rand_core::OsRng;
+
     use crate::constraint_system::{Constraint, TurboComposer};
     use crate::error::Error;
     use crate::fft::Polynomial;
     use crate::plonkup::MultiSet;
-    use dusk_bls12_381::BlsScalar;
-    use rand_core::OsRng;
+
+    use super::*;
 
     #[test]
     fn test_compute_lookup_permutation_vec() -> Result<(), Error> {
@@ -902,6 +946,7 @@ mod test {
                     &sigma_polys[2],
                     &sigma_polys[3],
                 ],
+                &mut None,
             ),
         ));
 
@@ -1268,7 +1313,7 @@ mod test {
 
         //1. Compute the permutation polynomial using both methods
         let [s_sigma_1_poly, s_sigma_2_poly, s_sigma_3_poly, s_sigma_4_poly] =
-            perm.compute_sigma_polynomials(n, domain);
+            perm.compute_sigma_polynomials(n, domain, &mut None);
         let (z_vec, numerator_components, denominator_components) =
             compute_slow_permutation_poly(
                 domain,

@@ -11,6 +11,7 @@
 //! roots to be the powers of a 2^n root of unity in the field.
 //! This allows us to perform polynomial operations in O(n)
 //! by performing an O(n log n) FFT over such a domain.
+#![allow(dead_code)]
 
 use dusk_bls12_381::BlsScalar;
 use dusk_bytes::{DeserializableSlice, Serializable};
@@ -41,23 +42,6 @@ impl Serializable<{ u64::SIZE + u32::SIZE + 5 * BlsScalar::SIZE }>
 {
     type Error = dusk_bytes::Error;
 
-    #[allow(unused_must_use)]
-    fn to_bytes(&self) -> [u8; Self::SIZE] {
-        use dusk_bytes::Write;
-
-        let mut buf = [0u8; Self::SIZE];
-        let mut writer = &mut buf[..];
-        writer.write(&self.size.to_bytes());
-        writer.write(&self.log_size_of_group.to_bytes());
-        writer.write(&self.size_as_field_element.to_bytes());
-        writer.write(&self.size_inv.to_bytes());
-        writer.write(&self.group_gen.to_bytes());
-        writer.write(&self.group_gen_inv.to_bytes());
-        writer.write(&self.generator_inv.to_bytes());
-
-        buf
-    }
-
     fn from_bytes(
         buf: &[u8; Self::SIZE],
     ) -> Result<EvaluationDomain, Self::Error> {
@@ -80,20 +64,45 @@ impl Serializable<{ u64::SIZE + u32::SIZE + 5 * BlsScalar::SIZE }>
             generator_inv,
         })
     }
+
+    #[allow(unused_must_use)]
+    fn to_bytes(&self) -> [u8; Self::SIZE] {
+        use dusk_bytes::Write;
+
+        let mut buf = [0u8; Self::SIZE];
+        let mut writer = &mut buf[..];
+        writer.write(&self.size.to_bytes());
+        writer.write(&self.log_size_of_group.to_bytes());
+        writer.write(&self.size_as_field_element.to_bytes());
+        writer.write(&self.size_inv.to_bytes());
+        writer.write(&self.group_gen.to_bytes());
+        writer.write(&self.group_gen_inv.to_bytes());
+        writer.write(&self.generator_inv.to_bytes());
+
+        buf
+    }
 }
 
 #[cfg(feature = "alloc")]
 pub(crate) mod alloc {
-
-    use super::*;
-    use crate::error::Error;
-    use crate::fft::Evaluations;
     #[rustfmt::skip]
     use ::alloc::vec::Vec;
     use core::ops::MulAssign;
+    use std::iter;
+    use std::ops::AddAssign;
+
     use dusk_bls12_381::{GENERATOR, ROOT_OF_UNITY, TWO_ADACITY};
+    use log::{debug, error, info};
     #[cfg(feature = "std")]
     use rayon::prelude::*;
+
+    use crate::error::Error;
+    use crate::fft::Evaluations;
+    use crate::gpu;
+    use crate::gpu::GPUResult;
+    use crate::multicore::{Workers, WORKERS};
+
+    use super::*;
 
     impl EvaluationDomain {
         /// Construct a domain that is large enough for evaluations of a
@@ -143,10 +152,37 @@ pub(crate) mod alloc {
             coeffs
         }
 
+        /// Compute many FFT
+        pub(crate) fn many_fft(
+            &self,
+            coeffs: &mut [&mut [BlsScalar]],
+            kern: &mut Option<gpu::LockedFFTKernel>,
+        ) {
+            let (omegas, exps): (Vec<_>, Vec<_>) =
+                iter::repeat((self.group_gen, self.log_size_of_group))
+                    .take(coeffs.len())
+                    .into_iter()
+                    .unzip();
+            best_many_fft(
+                coeffs,
+                omegas.as_slice(),
+                exps.as_slice(),
+                kern,
+                WORKERS.as_ref(),
+                None,
+            )
+        }
+
         /// Compute a FFT, modifying the vector in place.
         fn fft_in_place(&self, coeffs: &mut Vec<BlsScalar>) {
             coeffs.resize(self.size(), BlsScalar::zero());
-            best_fft(coeffs, self.group_gen, self.log_size_of_group)
+            best_fft(
+                coeffs,
+                self.group_gen,
+                self.log_size_of_group,
+                WORKERS.as_ref(),
+                None,
+            )
         }
 
         /// Compute an IFFT.
@@ -156,11 +192,56 @@ pub(crate) mod alloc {
             evals
         }
 
+        pub(crate) fn many_ifft(
+            &self,
+            coeffs: &mut [&mut [BlsScalar]],
+            kern: &mut Option<gpu::LockedFFTKernel>,
+        ) {
+            assert!(
+                WORKERS.as_ref().is_some(),
+                "workers must be initialized in multi-core"
+            );
+            let (omegas, exps): (Vec<_>, Vec<_>) =
+                iter::repeat((self.group_gen_inv, self.log_size_of_group))
+                    .take(coeffs.len())
+                    .into_iter()
+                    .unzip();
+            assert_eq!(omegas.len(), coeffs.len());
+            assert_eq!(exps.len(), coeffs.len());
+            best_many_fft(
+                coeffs,
+                omegas.as_slice(),
+                exps.as_slice(),
+                kern,
+                WORKERS.as_ref(),
+                None,
+            );
+            let workers = WORKERS.as_ref().unwrap();
+            for coeffs in coeffs {
+                workers.scope(coeffs.len(), |scope, chunk| {
+                    let minv = self.size_inv;
+                    for c in coeffs.chunks_mut(chunk) {
+                        scope.spawn(move |_| {
+                            for c in c {
+                                *c *= minv
+                            }
+                        });
+                    }
+                });
+            }
+        }
+
         /// Compute an IFFT, modifying the vector in place.
         #[inline]
         pub(crate) fn ifft_in_place(&self, evals: &mut Vec<BlsScalar>) {
             evals.resize(self.size(), BlsScalar::zero());
-            best_fft(evals, self.group_gen_inv, self.log_size_of_group);
+            best_fft(
+                evals,
+                self.group_gen_inv,
+                self.log_size_of_group,
+                WORKERS.as_ref(),
+                None,
+            );
 
             #[cfg(not(feature = "std"))]
             evals.iter_mut().for_each(|val| *val *= &self.size_inv);
@@ -169,12 +250,12 @@ pub(crate) mod alloc {
             evals.par_iter_mut().for_each(|val| *val *= &self.size_inv);
         }
 
-        fn distribute_powers(coeffs: &mut [BlsScalar], g: BlsScalar) {
-            let mut pow = BlsScalar::one();
-            coeffs.iter_mut().for_each(|c| {
-                *c *= &pow;
-                pow *= &g
-            })
+        fn distribute_powers(
+            coeffs: &mut [BlsScalar],
+            g: BlsScalar,
+            workers: Option<&Workers>,
+        ) {
+            distribute_powers(coeffs, g, workers);
         }
 
         /// Compute a FFT over a coset of the domain.
@@ -184,10 +265,61 @@ pub(crate) mod alloc {
             coeffs
         }
 
+        /// Compute coset FFT with same GENERATOR and log of the domain
+        pub(crate) fn many_coset_fft(
+            &self,
+            coeffs: &mut [&mut [BlsScalar]],
+            kern: &mut Option<gpu::LockedFFTKernel>,
+        ) {
+            let (omegas, exps): (Vec<_>, Vec<_>) =
+                iter::repeat((self.group_gen, self.log_size_of_group))
+                    .take(coeffs.len())
+                    .into_iter()
+                    .unzip();
+            if let Some(kern) = kern {
+                assert!(WORKERS.as_ref().is_some(), "GPU feature");
+                info!("many coset fft in GPU !");
+                kern.with(|kern| {
+                    kern.many_coset_fft(
+                        coeffs,
+                        omegas.as_slice(),
+                        GENERATOR,
+                        exps.as_slice(),
+                        WORKERS.as_ref().unwrap(),
+                    )
+                })
+                .expect("many coset FFT.")
+            } else {
+                info!("many coset fft on CPU !");
+                for coeffs in coeffs.iter_mut() {
+                    assert_eq!(coeffs.len(), self.size());
+                    distribute_powers(coeffs, GENERATOR, WORKERS.as_ref());
+                    best_fft(
+                        coeffs,
+                        self.group_gen,
+                        self.log_size_of_group,
+                        WORKERS.as_ref(),
+                        None,
+                    )
+                }
+            }
+        }
+
+        pub(crate) fn many_coset_ifft(
+            &self,
+            coeffs: &mut [&mut [BlsScalar]],
+            kern: &mut Option<gpu::LockedFFTKernel>,
+        ) {
+            self.many_ifft(coeffs, kern);
+            for coeffs in coeffs.iter_mut() {
+                distribute_powers(coeffs, self.generator_inv, WORKERS.as_ref())
+            }
+        }
+
         /// Compute a FFT over a coset of the domain, modifying the input vector
         /// in place.
         fn coset_fft_in_place(&self, coeffs: &mut Vec<BlsScalar>) {
-            Self::distribute_powers(coeffs, GENERATOR);
+            Self::distribute_powers(coeffs, GENERATOR, WORKERS.as_ref());
             self.fft_in_place(coeffs);
         }
 
@@ -202,7 +334,11 @@ pub(crate) mod alloc {
         /// vector in place.
         fn coset_ifft_in_place(&self, evals: &mut Vec<BlsScalar>) {
             self.ifft_in_place(evals);
-            Self::distribute_powers(evals, self.generator_inv);
+            Self::distribute_powers(
+                evals,
+                self.generator_inv,
+                WORKERS.as_ref(),
+            );
         }
 
         #[allow(clippy::needless_range_loop)]
@@ -301,9 +437,168 @@ pub(crate) mod alloc {
         }
     }
 
+    pub(crate) fn distribute_powers(
+        coeffs: &mut [BlsScalar],
+        g: BlsScalar,
+        workers: Option<&Workers>,
+    ) {
+        #[cfg(not(feature = "multi-core"))]
+        {
+            let mut pow = BlsScalar::one();
+            coeffs.iter_mut().for_each(|c| {
+                *c *= &pow;
+                pow *= &g
+            })
+        }
+        #[cfg(feature = "multi-core")]
+        {
+            let worker = workers.unwrap();
+            worker.scope(coeffs.len(), |scope, chunk| {
+                for (i, v) in coeffs.chunks_mut(chunk).enumerate() {
+                    scope.spawn(move |_| {
+                        let mut u = g.pow(&[(i * chunk) as u64, 0, 0, 0]);
+                        for v in v.iter_mut() {
+                            v.mul_assign(&u);
+                            u.mul_assign(&g);
+                        }
+                    });
+                }
+            });
+        }
+    }
+
+    fn gpu_fft(
+        kern: &mut gpu::FFTKernel,
+        coeffs: &mut [&mut [BlsScalar]],
+        omegas: &[BlsScalar],
+        log_ns: &[u32],
+        worker: &Workers,
+    ) -> GPUResult<()> {
+        kern.radix_fft_many(coeffs, omegas, log_ns, worker)
+    }
+
+    fn best_many_fft(
+        coeffs: &mut [&mut [BlsScalar]],
+        omegas: &[BlsScalar],
+        log_ns: &[u32],
+        kern: &mut Option<gpu::LockedFFTKernel>,
+        worker: Option<&Workers>,
+        cpus_hint: Option<usize>,
+    ) {
+        assert!(
+            worker.is_some(),
+            "workers must be initialized in multi-core"
+        );
+        if let Some(ref mut kern) = kern {
+            match kern.with(|k: &mut gpu::FFTKernel| {
+                gpu_fft(k, coeffs, omegas, log_ns, worker.unwrap())
+            }) {
+                Ok(_) => {
+                    debug!("GPU many fft done !");
+                    return;
+                }
+                Err(e) => {
+                    error!("error {} occurred when computing fft on gpu", e)
+                }
+            }
+        }
+        debug!("CPU many fft !");
+        for ((a, omega), log_n) in
+            coeffs.iter_mut().zip(omegas.iter()).zip(log_ns.iter())
+        {
+            let worker = worker.unwrap();
+            let log_cpus = satisfy_cpu(cpus_hint, worker);
+            parallel_fft_cpu(worker, *a, *omega, *log_n, log_cpus);
+        }
+    }
+
+    fn satisfy_cpu(cpus_hint: Option<usize>, worker: &Workers) -> u32 {
+        let log_cpus = if let Some(hint) = cpus_hint {
+            assert!(hint <= worker.cpus);
+            let hint = if hint > 0 {
+                let mut pow = 0;
+                while (1 << (pow + 1)) <= hint {
+                    pow += 1;
+                }
+                pow
+            } else {
+                0
+            };
+            hint
+        } else {
+            worker.log_num_cpus()
+        };
+        log_cpus
+    }
+
     #[cfg(feature = "alloc")]
-    fn best_fft(a: &mut [BlsScalar], omega: BlsScalar, log_n: u32) {
-        serial_fft(a, omega, log_n)
+    fn best_fft(
+        a: &mut [BlsScalar],
+        omega: BlsScalar,
+        log_n: u32,
+        worker: Option<&Workers>,
+        cpus_hint: Option<usize>,
+    ) {
+        #[cfg(not(feature = "multi-core"))]
+        serial_fft(a, omega, log_n);
+        #[cfg(feature = "multi-core")]
+        worker.map(|worker| {
+            let log_cpus = satisfy_cpu(cpus_hint, worker);
+            parallel_fft_cpu(worker, a, omega, log_n, log_cpus)
+        });
+    }
+
+    pub(crate) fn parallel_fft_cpu(
+        worker: &Workers,
+        a: &mut [BlsScalar],
+        omega: BlsScalar,
+        log_n: u32,
+        log_cpus: u32,
+    ) {
+        if log_n <= log_cpus {
+            serial_fft(a, omega, log_n);
+            return;
+        }
+
+        let num_cpus = 1 << log_cpus;
+        let log_new_n = log_n - log_cpus;
+        let mut tmp = vec![vec![BlsScalar::zero(); 1 << log_new_n]; num_cpus];
+        let new_omega = omega.pow(&[num_cpus as u64, 0, 0, 0]);
+        worker.scope(0, |scope, _| {
+            let a = &*a;
+            for (j, tmp) in tmp.iter_mut().enumerate() {
+                scope.spawn(move |_| {
+                    let omega_j = omega.pow(&[j as u64, 0, 0, 0]);
+                    let omega_j_step =
+                        omega.pow(&[(j as u64) << log_new_n, 0, 0, 0]);
+                    let mut elt = BlsScalar::one();
+                    for i in 0..(1 << log_new_n) {
+                        for s in 0..num_cpus {
+                            let idx = (i + (s << log_new_n)) % (1 << log_n);
+                            let mut t = a[idx];
+                            t.mul_assign(&elt);
+                            tmp[i].add_assign(&t);
+                            elt.mul_assign(&omega_j_step);
+                        }
+                        elt.mul_assign(&omega_j);
+                    }
+                    serial_fft(tmp, new_omega, log_new_n);
+                });
+            }
+        });
+        worker.scope(a.len(), |scope, chunk| {
+            let tmp = &tmp;
+            for (idx, a) in a.chunks_mut(chunk).enumerate() {
+                scope.spawn(move |_| {
+                    let mut idx = idx * chunk;
+                    let mask = (1 << log_cpus) - 1;
+                    for a in a {
+                        *a = tmp[idx & mask][idx >> log_cpus];
+                        idx += 1;
+                    }
+                });
+            }
+        })
     }
 
     #[cfg(feature = "alloc")]

@@ -17,6 +17,8 @@ use dusk_bls12_381::BlsScalar;
 use dusk_bytes::{DeserializableSlice, Serializable, Write};
 use dusk_jubjub::{JubJubAffine, JubJubExtended, JubJubScalar};
 use rand_core::{CryptoRng, RngCore};
+use crate::gpu;
+use crate::gpu::LockedFFTKernel;
 
 #[derive(Default, Debug, Clone)]
 #[cfg_attr(feature = "canon", derive(Canon))]
@@ -271,14 +273,15 @@ where
         let public_inputs_indexes =
             prover.composer_mut().public_input_indexes();
 
-        prover.preprocess(&ck)?;
+        let mut kern = Some(LockedFFTKernel::new(false));
+        prover.preprocess(&ck, &mut kern)?;
 
         // Generate & save `VerifierKey` with some random values.
         let mut verifier = Verifier::new(b"CircuitCompilation");
 
         self.gadget(verifier.composer_mut())?;
 
-        verifier.preprocess(&ck)?;
+        verifier.preprocess(&ck, &mut kern)?;
 
         Ok((
             prover
@@ -313,7 +316,8 @@ where
 
         // Add ProverKey to Prover
         prover.prover_key = Some(prover_key.clone());
-        prover.prove(&ck, rng)
+        let mut kern = gpu::kernel();
+        prover.prove(&ck, rng, &mut kern)
     }
 
     /// Verify the provided proof for the compiled verifier data

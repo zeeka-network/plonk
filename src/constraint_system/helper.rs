@@ -12,6 +12,7 @@ use crate::plonkup::LookupTable;
 use crate::proof_system::{Prover, Verifier};
 use dusk_bls12_381::BlsScalar;
 use rand_core::OsRng;
+use crate::gpu;
 
 /// Adds dummy gates using arithmetic gates
 pub(crate) fn dummy_gadget(n: usize, composer: &mut TurboComposer) {
@@ -48,6 +49,7 @@ pub(crate) fn gadget_tester(
     // Common View
     let public_parameters = PublicParameters::setup(2 * n, &mut OsRng)?;
     // Provers View
+    let mut kern = gpu::kernel();
     let (proof, public_inputs) = {
         // Create a prover struct
         let mut prover = Prover::new(b"demo");
@@ -63,14 +65,14 @@ pub(crate) fn gadget_tester(
             .trim(2 * prover.cs.gates().next_power_of_two())?;
 
         // Preprocess circuit
-        prover.preprocess(&ck)?;
+        prover.preprocess(&ck, &mut kern)?;
 
         // Once the prove method is called, the public inputs are cleared
         // So pre-fetch these before calling Prove
         let public_inputs = prover.cs.to_dense_public_inputs();
 
         // Compute Proof
-        (prover.prove(&ck, &mut OsRng)?, public_inputs)
+        (prover.prove(&ck, &mut OsRng, &mut kern)?, public_inputs)
     };
     // Verifiers view
     //
@@ -88,7 +90,7 @@ pub(crate) fn gadget_tester(
         public_parameters.trim(verifier.cs.gates().next_power_of_two())?;
 
     // Preprocess circuit
-    verifier.preprocess(&ck)?;
+    verifier.preprocess(&ck, &mut kern)?;
 
     // Verify proof
     verifier.verify(&proof, &vk, &public_inputs)
@@ -105,6 +107,7 @@ pub(crate) fn gadget_plonkup_tester(
     // Common View
     let public_parameters = PublicParameters::setup(2 * n, &mut OsRng)?;
     // Provers View
+    let mut kern = gpu::kernel();
     let (proof, public_inputs) = {
         // Create a prover struct
         let mut prover = Prover::new(b"demo");
@@ -123,14 +126,14 @@ pub(crate) fn gadget_plonkup_tester(
             .trim(2 * prover.cs.gates().next_power_of_two())?;
 
         // Preprocess circuit
-        prover.preprocess(&ck)?;
+        prover.preprocess(&ck,&mut kern)?;
 
         // Once the prove method is called, the public inputs are cleared
         // So pre-fetch these before calling Prove
         let public_inputs = prover.cs.to_dense_public_inputs();
 
         // Compute Proof
-        (prover.prove(&ck, &mut OsRng)?, public_inputs)
+        (prover.prove(&ck, &mut OsRng,&mut kern)?, public_inputs)
     };
     // Verifiers view
     //
@@ -151,7 +154,7 @@ pub(crate) fn gadget_plonkup_tester(
         public_parameters.trim(verifier.cs.gates().next_power_of_two())?;
 
     // Preprocess circuit
-    verifier.preprocess(&ck)?;
+    verifier.preprocess(&ck, &mut kern)?;
 
     // Verify proof
     verifier.verify(&proof, &vk, &public_inputs)
