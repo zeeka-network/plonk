@@ -4,14 +4,16 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
+use dusk_bls12_381::BlsScalar;
+use merlin::Transcript;
+
 use crate::commitment_scheme::{CommitKey, OpeningKey};
 use crate::constraint_system::TurboComposer;
 use crate::error::Error;
+use crate::gpu::LockedFFTKernel;
 use crate::proof_system::widget::VerifierKey;
 use crate::proof_system::Proof;
 use crate::transcript::TranscriptProtocol;
-use dusk_bls12_381::BlsScalar;
-use merlin::Transcript;
 
 /// Abstraction structure designed verify [`Proof`]s.
 #[allow(missing_debug_implementations)]
@@ -66,10 +68,11 @@ impl Verifier {
     /// Preprocess a circuit to obtain a [`VerifierKey`] and a circuit
     /// descriptor so that the `Verifier` instance can verify [`Proof`]s
     /// for this circuit descriptor instance.
-    pub fn preprocess(&mut self, commit_key: &CommitKey) -> Result<(), Error> {
+    pub fn preprocess(&mut self, commit_key: &CommitKey, kern: &mut Option<LockedFFTKernel>) -> Result<(), Error> {
         let vk = self.cs.preprocess_verifier(
             commit_key,
             &mut self.preprocessed_transcript,
+            kern,
         )?;
 
         self.verifier_key = Some(vk);

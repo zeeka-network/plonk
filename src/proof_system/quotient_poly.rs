@@ -4,15 +4,18 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
+use alloc::vec::Vec;
+
+use dusk_bls12_381::BlsScalar;
+#[cfg(feature = "std")]
+use rayon::prelude::*;
+
+use crate::gpu::LockedFFTKernel;
 use crate::{
     error::Error,
     fft::{EvaluationDomain, Polynomial},
     proof_system::ProverKey,
 };
-use alloc::vec::Vec;
-use dusk_bls12_381::BlsScalar;
-#[cfg(feature = "std")]
-use rayon::prelude::*;
 
 /// Computes the Quotient [`Polynomial`] given the [`EvaluationDomain`], a
 /// [`ProverKey`] and some other info.
@@ -57,23 +60,79 @@ pub(crate) fn compute(
         BlsScalar,
         BlsScalar,
     ),
+    kern: &mut Option<LockedFFTKernel>,
 ) -> Result<Polynomial, Error> {
+    let mut poly_scaled_1 =
+        first_lagrange_poly_scaled(domain, BlsScalar::one());
+    let mut l1_alpha_sq_evals =
+        first_lagrange_poly_scaled(domain, alpha.square());
+    domain.many_ifft(&mut [&mut poly_scaled_1, &mut l1_alpha_sq_evals], kern);
+
     // Compute 8n evals
     let domain_8n = EvaluationDomain::new(8 * domain.size())?;
+    let mut z_eval_8n = z_poly.coeffs.clone();
+    z_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut p_eval_8n = p_poly.coeffs.clone();
+    p_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut t_eval_8n = t_poly.coeffs.clone();
+    t_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut f_eval_8n = f_poly.coeffs.clone();
+    f_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut h_1_eval_8n = h_1_poly.coeffs.clone();
+    h_1_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut h_2_eval_8n = h_2_poly.coeffs.clone();
+    h_2_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut a_w_eval_8n = a_w_poly.coeffs.clone();
+    a_w_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut b_w_eval_8n = b_w_poly.coeffs.clone();
+    b_w_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut c_w_eval_8n = c_w_poly.coeffs.clone();
+    c_w_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut d_w_eval_8n = d_w_poly.coeffs.clone();
+    d_w_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut public_eval_8n = public_inputs_poly.coeffs.clone();
+    public_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    let mut l1_eval_8n = poly_scaled_1;
+    l1_eval_8n.resize(domain_8n.size(), BlsScalar::zero());
+    l1_alpha_sq_evals.resize(domain_8n.size(), BlsScalar::zero());
+    domain_8n.many_coset_fft(
+        &mut [
+            &mut z_eval_8n,
+            &mut p_eval_8n,
+            &mut t_eval_8n,
+            &mut f_eval_8n,
+            &mut h_1_eval_8n,
+            &mut h_2_eval_8n,
+            &mut a_w_eval_8n,
+            &mut b_w_eval_8n,
+            &mut c_w_eval_8n,
+            &mut d_w_eval_8n,
+            &mut public_eval_8n,
+            &mut l1_eval_8n,
+            &mut l1_alpha_sq_evals,
+        ],
+        kern,
+    );
 
-    let mut z_eval_8n = domain_8n.coset_fft(z_poly);
-    let mut p_eval_8n = domain_8n.coset_fft(p_poly);
-    let mut t_eval_8n = domain_8n.coset_fft(t_poly);
+    // let l1_alpha_sq_evals = domain_8n.coset_fft(&ploy_scaled_alpha_square);
 
-    let f_eval_8n = domain_8n.coset_fft(f_poly);
+    // let public_eval_8n = domain_8n.coset_fft(public_inputs_poly);
+    //
+    // let l1_eval_8n = domain_8n.coset_fft(&poly_scaled_1);
 
-    let mut h_1_eval_8n = domain_8n.coset_fft(h_1_poly);
-    let mut h_2_eval_8n = domain_8n.coset_fft(h_2_poly);
-
-    let mut a_w_eval_8n = domain_8n.coset_fft(a_w_poly);
-    let mut b_w_eval_8n = domain_8n.coset_fft(b_w_poly);
-    let c_w_eval_8n = domain_8n.coset_fft(c_w_poly);
-    let mut d_w_eval_8n = domain_8n.coset_fft(d_w_poly);
+    // let mut z_eval_8n = domain_8n.coset_fft(z_poly);
+    // let mut p_eval_8n = domain_8n.coset_fft(p_poly);
+    // let mut t_eval_8n = domain_8n.coset_fft(t_poly);
+    //
+    // let f_eval_8n = domain_8n.coset_fft(f_poly);
+    //
+    // let mut h_1_eval_8n = domain_8n.coset_fft(h_1_poly);
+    // let mut h_2_eval_8n = domain_8n.coset_fft(h_2_poly);
+    //
+    // let mut a_w_eval_8n = domain_8n.coset_fft(a_w_poly);
+    // let mut b_w_eval_8n = domain_8n.coset_fft(b_w_poly);
+    // let c_w_eval_8n = domain_8n.coset_fft(c_w_poly);
+    // let mut d_w_eval_8n = domain_8n.coset_fft(d_w_poly);
 
     for i in 0..8 {
         z_eval_8n.push(z_eval_8n[i]);
@@ -98,7 +157,6 @@ pub(crate) fn compute(
         ),
         prover_key,
         (&a_w_eval_8n, &b_w_eval_8n, &c_w_eval_8n, &d_w_eval_8n),
-        public_inputs_poly,
         zeta,
         (delta, epsilon),
         &f_eval_8n,
@@ -106,14 +164,17 @@ pub(crate) fn compute(
         &t_eval_8n,
         &h_1_eval_8n,
         &h_2_eval_8n,
+        &public_eval_8n,
+        &l1_eval_8n,
     );
 
     let t_2 = compute_permutation_checks(
-        domain,
+        domain_8n.size(),
         prover_key,
         (&a_w_eval_8n, &b_w_eval_8n, &c_w_eval_8n, &d_w_eval_8n),
         &z_eval_8n,
         (alpha, beta, gamma),
+        &l1_alpha_sq_evals,
     );
 
     #[cfg(not(feature = "std"))]
@@ -122,16 +183,18 @@ pub(crate) fn compute(
     #[cfg(feature = "std")]
     let range = (0..domain_8n.size()).into_par_iter();
 
-    let quotient: Vec<_> = range
+    let mut quotient: Vec<_> = range
         .map(|i| {
             let numerator = t_1[i] + t_2[i];
             let denominator = prover_key.v_h_coset_8n()[i];
             numerator * denominator.invert().unwrap()
         })
         .collect();
+    domain_8n.many_coset_ifft(&mut [&mut quotient], kern);
+
 
     Ok(Polynomial::from_coefficients_vec(
-        domain_8n.coset_ifft(&quotient),
+        quotient,
     ))
 }
 
@@ -153,7 +216,6 @@ fn compute_circuit_satisfiability_equation(
         &[BlsScalar],
         &[BlsScalar],
     ),
-    pi_poly: &Polynomial,
     zeta: &BlsScalar,
     (delta, epsilon): (&BlsScalar, &BlsScalar),
     f_eval_8n: &[BlsScalar],
@@ -161,20 +223,19 @@ fn compute_circuit_satisfiability_equation(
     t_eval_8n: &[BlsScalar],
     h_1_eval_8n: &[BlsScalar],
     h_2_eval_8n: &[BlsScalar],
+    public_eval_8n: &[BlsScalar],
+    l1_eval_8n: &[BlsScalar],
 ) -> Vec<BlsScalar> {
-    let domain_8n = EvaluationDomain::new(8 * domain.size()).unwrap();
-    let public_eval_8n = domain_8n.coset_fft(pi_poly);
-
-    let l1_eval_8n = domain_8n.coset_fft(&compute_first_lagrange_poly_scaled(
-        domain,
-        BlsScalar::one(),
-    ));
+    // let domain_8n = EvaluationDomain::new(8 * domain.size()).unwrap();
+    // let public_eval_8n = domain_8n.coset_fft(pi_poly);
+    //
+    // let l1_eval_8n = domain_8n.coset_fft(&poly_scaled_1);
 
     #[cfg(not(feature = "std"))]
-    let range = (0..domain_8n.size()).into_iter();
+    let range = (0..(8 * domain.size())).into_iter();
 
     #[cfg(feature = "std")]
-    let range = (0..domain_8n.size()).into_par_iter();
+    let range = (0..(8 * domain.size())).into_par_iter();
 
     let t: Vec<_> = range
         .map(|i| {
@@ -273,7 +334,7 @@ fn compute_circuit_satisfiability_equation(
 }
 
 fn compute_permutation_checks(
-    domain: &EvaluationDomain,
+    domain_8n_size: usize,
     prover_key: &ProverKey,
     (a_w_eval_8n, b_w_eval_8n, c_w_eval_8n, d_w_eval_8n): (
         &[BlsScalar],
@@ -283,17 +344,18 @@ fn compute_permutation_checks(
     ),
     z_eval_8n: &[BlsScalar],
     (alpha, beta, gamma): (&BlsScalar, &BlsScalar, &BlsScalar),
+    l1_alpha_sq_evals: &[BlsScalar],
 ) -> Vec<BlsScalar> {
-    let domain_8n = EvaluationDomain::new(8 * domain.size()).unwrap();
-    let l1_poly_alpha =
-        compute_first_lagrange_poly_scaled(domain, alpha.square());
-    let l1_alpha_sq_evals = domain_8n.coset_fft(&l1_poly_alpha.coeffs);
+    // let domain_8n = EvaluationDomain::new(8 * domain.size()).unwrap();
+    // let l1_poly_alpha =
+    //     compute_first_lagrange_poly_scaled(domain, alpha.square());
+    // let l1_alpha_sq_evals = domain_8n.coset_fft(&ploy_scaled_alpha_square);
 
     #[cfg(not(feature = "std"))]
-    let range = (0..domain_8n.size()).into_iter();
+    let range = (0..domain_8n_size).into_iter();
 
     #[cfg(feature = "std")]
-    let range = (0..domain_8n.size()).into_par_iter();
+    let range = (0..domain_8n_size).into_par_iter();
 
     let t: Vec<_> = range
         .map(|i| {
@@ -314,12 +376,13 @@ fn compute_permutation_checks(
         .collect();
     t
 }
-fn compute_first_lagrange_poly_scaled(
+
+#[inline]
+fn first_lagrange_poly_scaled(
     domain: &EvaluationDomain,
     scale: BlsScalar,
-) -> Polynomial {
+) -> Vec<BlsScalar> {
     let mut x_evals = vec![BlsScalar::zero(); domain.size()];
     x_evals[0] = scale;
-    domain.ifft_in_place(&mut x_evals);
-    Polynomial::from_coefficients_vec(x_evals)
+    x_evals
 }

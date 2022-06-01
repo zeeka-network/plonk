@@ -72,14 +72,15 @@ if #[cfg(feature = "alloc")] {
 });
 
 mod fft;
-mod transcript;
 mod multicore;
+mod transcript;
 
 pub mod commitment_scheme;
 pub mod error;
+mod gpu;
 pub mod prelude;
 pub mod proof_system;
-
+mod test_utils;
 
 #[doc = include_str!("../docs/notes-intro.md")]
 pub mod notes {

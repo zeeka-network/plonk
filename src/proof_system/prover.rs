@@ -4,6 +4,14 @@
 //
 // Copyright (c) DUSK NETWORK. All rights reserved.
 
+use alloc::vec::Vec;
+
+use dusk_bls12_381::BlsScalar;
+use merlin::Transcript;
+use rand_core::{CryptoRng, RngCore};
+use rayon::prelude::*;
+
+use crate::gpu::LockedFFTKernel;
 use crate::{
     commitment_scheme::CommitKey,
     constraint_system::{TurboComposer, Witness},
@@ -16,10 +24,6 @@ use crate::{
     transcript::TranscriptProtocol,
     util,
 };
-use alloc::vec::Vec;
-use dusk_bls12_381::BlsScalar;
-use merlin::Transcript;
-use rand_core::{CryptoRng, RngCore};
 
 /// Abstraction structure designed to construct a circuit and generate
 /// [`Proof`]s for it.
@@ -41,13 +45,13 @@ impl Prover {
     }
 
     /// Preprocesses the underlying constraint system.
-    pub fn preprocess(&mut self, commit_key: &CommitKey) -> Result<(), Error> {
+    pub fn preprocess(&mut self, commit_key: &CommitKey, kern: &mut Option<LockedFFTKernel>) -> Result<(), Error> {
         if self.prover_key.is_some() {
             return Err(Error::CircuitAlreadyPreprocessed);
         }
         let pk = self
             .cs
-            .preprocess_prover(commit_key, &mut self.preprocessed_transcript)?;
+            .preprocess_prover(commit_key, &mut self.preprocessed_transcript, kern)?;
         self.prover_key = Some(pk);
         Ok(())
     }
@@ -152,6 +156,7 @@ impl Prover {
     /// if hiding degree = 1: (b2*X^(n+1) + b1*X^n - b2*X - b1) + w_vec
     /// if hiding degree = 2: (b3*X^(n+2) + b2*X^(n+1) + b1*X^n - b3*X^2 - b2*X
     /// - b1) + w_vec
+    #[allow(dead_code)]
     pub(crate) fn blind_poly<R: RngCore + CryptoRng>(
         w_vec: &Vec<BlsScalar>,
         hiding_degree: usize,
@@ -172,6 +177,21 @@ impl Prover {
         Polynomial::from_coefficients_vec(w_vec_inverse)
     }
 
+    pub(crate) fn blind_coeffs_with_inv<R: RngCore + CryptoRng>(
+        w_vec_inverse: &mut Vec<BlsScalar>,
+        hiding_degree: usize,
+        rng: &mut R,
+    ) {
+        for i in 0..hiding_degree + 1 {
+            // we declare and randomly select a blinding scalar
+            let blinding_scalar = util::random_scalar(rng);
+            // modify the first elements of the vector
+            w_vec_inverse[i] = w_vec_inverse[i] - blinding_scalar;
+            // append last elements at the end of the vector
+            w_vec_inverse.push(blinding_scalar);
+        }
+    }
+
     /// Creates a [`Proof]` that demonstrates that a circuit is satisfied.
     ///
     /// # Note
@@ -185,6 +205,7 @@ impl Prover {
         commit_key: &CommitKey,
         prover_key: &ProverKey,
         rng: &mut R,
+        kern: &mut Option<LockedFFTKernel>
     ) -> Result<Proof, Error> {
         // make sure the domain is big enough to handle the circuit as well as
         // the lookup table
@@ -198,14 +219,15 @@ impl Prover {
         let mut transcript = self.preprocessed_transcript.clone();
 
         // PIs have to be part of the transcript
-        for pi in self.cs.to_dense_public_inputs().iter() {
+        let pis = self.cs.to_dense_public_inputs();
+        for pi in pis.iter() {
             transcript.append_scalar(b"pi", pi);
         }
 
         // We fill with zeros up to the domain size, in order to match the
         // length of the vector used by the verifier in his side in the
         // implementation
-        for _ in 0..(domain.size() - self.cs.to_dense_public_inputs().len()) {
+        for _ in 0..(domain.size() - pis.len()) {
             transcript.append_scalar(b"pi", &BlsScalar::from(0u64));
         }
 
@@ -224,10 +246,34 @@ impl Prover {
 
         // Wires are now in evaluation form, convert them to coefficients so
         // that we may commit to them
-        let a_w_poly = Prover::blind_poly(&a_w_scalar, 1, &domain, rng);
-        let b_w_poly = Prover::blind_poly(&b_w_scalar, 1, &domain, rng);
-        let c_w_poly = Prover::blind_poly(&c_w_scalar, 1, &domain, rng);
-        let d_w_poly = Prover::blind_poly(&d_w_scalar, 1, &domain, rng);
+        // init kern
+
+        let mut a_w_scalar_coeffs = a_w_scalar.clone();
+        let mut b_w_scalar_coeffs = b_w_scalar.clone();
+        let mut c_w_scalar_coeffs = c_w_scalar.clone();
+        let mut d_w_scalar_coeffs = d_w_scalar.clone();
+        domain.many_ifft(
+            &mut [
+                &mut a_w_scalar_coeffs,
+                &mut b_w_scalar_coeffs,
+                &mut c_w_scalar_coeffs,
+                &mut d_w_scalar_coeffs,
+            ],
+            kern,
+        );
+        Prover::blind_coeffs_with_inv(&mut a_w_scalar_coeffs, 1, rng);
+        let a_w_poly = Polynomial::from_coefficients_vec(a_w_scalar_coeffs);
+        Prover::blind_coeffs_with_inv(&mut b_w_scalar_coeffs, 1, rng);
+        let b_w_poly = Polynomial::from_coefficients_vec(b_w_scalar_coeffs);
+        Prover::blind_coeffs_with_inv(&mut c_w_scalar_coeffs, 1, rng);
+        let c_w_poly = Polynomial::from_coefficients_vec(c_w_scalar_coeffs);
+        Prover::blind_coeffs_with_inv(&mut d_w_scalar_coeffs, 1, rng);
+        let d_w_poly = Polynomial::from_coefficients_vec(d_w_scalar_coeffs);
+
+        // let a_w_poly = Prover::blind_poly(&a_w_scalar, 1, &domain, rng);
+        // let b_w_poly = Prover::blind_poly(&b_w_scalar, 1, &domain, rng);
+        // let c_w_poly = Prover::blind_poly(&c_w_scalar, 1, &domain, rng);
+        // let d_w_poly = Prover::blind_poly(&d_w_scalar, 1, &domain, rng);
 
         // Commit to wire polynomials
         // ([a(x)]_1, [b(x)]_1, [c(x)]_1, [d(x)]_1)
@@ -257,34 +303,35 @@ impl Prover {
             zeta,
         );
 
-        // Compute t'
-        let t_prime_poly = Polynomial::from_coefficients_vec(
-            domain.ifft(&compressed_t_multiset.0),
-        );
+        // old Compute t'
+        // let t_prime_poly = Polynomial::from_coefficients_vec(
+        //     domain.ifft(&compressed_t_multiset.0),
+        // );
 
         // Compute table f
         // When q_k[i] is zero the wire value is replaced with a dummy
         // value Currently set as the first row of the public table
         // If q_k is one the wire values are preserved
+        // let worker = default_worker();
         let f_1_scalar = a_w_scalar
-            .iter()
+            .par_iter()
             .zip(&padded_q_k)
             .map(|(w, s)| {
                 w * s + (BlsScalar::one() - s) * compressed_t_multiset.0[0]
             })
             .collect::<Vec<BlsScalar>>();
         let f_2_scalar = b_w_scalar
-            .iter()
+            .par_iter()
             .zip(&padded_q_k)
             .map(|(w, s)| w * s)
             .collect::<Vec<BlsScalar>>();
         let f_3_scalar = c_w_scalar
-            .iter()
+            .par_iter()
             .zip(&padded_q_k)
             .map(|(w, s)| w * s)
             .collect::<Vec<BlsScalar>>();
         let f_4_scalar = d_w_scalar
-            .iter()
+            .par_iter()
             .zip(&padded_q_k)
             .map(|(w, s)| w * s)
             .collect::<Vec<BlsScalar>>();
@@ -300,9 +347,23 @@ impl Prover {
             zeta,
         );
 
-        // Compute long query poly
-        let f_poly =
-            Prover::blind_poly(&compressed_f_multiset.0, 1, &domain, rng);
+        // let compressed_t_multiset_coeffs = compressed_t_multiset.0.clone();
+        // new Compute t'
+        // let t_prime_poly = Polynomial::from_coefficients_vec(
+        //     domain.ifft(&compressed_t_multiset.0),
+        // );
+        let mut t_prime_coeffs = compressed_t_multiset.0.clone();
+        let mut f_coeffs = compressed_f_multiset.0.clone();
+        domain
+            .many_ifft(&mut [&mut t_prime_coeffs, &mut f_coeffs], kern);
+        let t_prime_poly = Polynomial::from_coefficients_vec(t_prime_coeffs);
+        // new Compute long query poly
+        Prover::blind_coeffs_with_inv(&mut f_coeffs, 1, rng);
+        let f_poly = Polynomial::from_coefficients_vec(f_coeffs);
+
+        // old Compute long query poly
+        // let f_poly =
+        //     Prover::blind_poly(&compressed_f_multiset.0, 1, &domain, rng);
 
         // Commit to query polynomial
         let f_poly_commit = commit_key.commit(&f_poly)?;
@@ -318,9 +379,18 @@ impl Prover {
         // Compute first and second halves of s, as h_1 and h_2
         let (h_1, h_2) = s.halve_alternating();
 
+        let mut h_1_coeffs = h_1.0.clone();
+        let mut h_2_coeffs = h_2.0.clone();
+        domain.many_ifft(&mut [&mut h_1_coeffs, &mut h_2_coeffs], kern);
+        Prover::blind_coeffs_with_inv(&mut h_1_coeffs, 2, rng);
+        Prover::blind_coeffs_with_inv(&mut h_2_coeffs, 1, rng);
         // Compute h polys
-        let h_1_poly = Prover::blind_poly(&h_1.0, 2, &domain, rng);
-        let h_2_poly = Prover::blind_poly(&h_2.0, 1, &domain, rng);
+        let h_1_poly = Polynomial::from_coefficients_vec(h_1_coeffs);
+        let h_2_poly = Polynomial::from_coefficients_vec(h_2_coeffs);
+
+        // Compute h polys
+        // let h_1_poly = Prover::blind_poly(&h_1.0, 2, &domain, rng);
+        // let h_2_poly = Prover::blind_poly(&h_2.0, 1, &domain, rng);
 
         // Commit to h polys
         let h_1_poly_commit = commit_key.commit(&h_1_poly).unwrap();
@@ -338,23 +408,29 @@ impl Prover {
         let delta = transcript.challenge_scalar(b"delta");
         let epsilon = transcript.challenge_scalar(b"epsilon");
 
-        let z_1_poly = Prover::blind_poly(
-            &self.cs.perm.compute_permutation_vec(
-                &domain,
-                [a_w_scalar, b_w_scalar, c_w_scalar, d_w_scalar],
-                &beta,
-                &gamma,
-                [
-                    &prover_key.permutation.s_sigma_1.0,
-                    &prover_key.permutation.s_sigma_2.0,
-                    &prover_key.permutation.s_sigma_3.0,
-                    &prover_key.permutation.s_sigma_4.0,
-                ],
-            ),
-            2,
+        let mut z_1_coeffs = self.cs.perm.compute_permutation_vec(
             &domain,
-            rng,
+            [a_w_scalar, b_w_scalar, c_w_scalar, d_w_scalar],
+            &beta,
+            &gamma,
+            [
+                &prover_key.permutation.s_sigma_1.0,
+                &prover_key.permutation.s_sigma_2.0,
+                &prover_key.permutation.s_sigma_3.0,
+                &prover_key.permutation.s_sigma_4.0,
+            ],
+            kern,
         );
+        domain.many_ifft(&mut [&mut z_1_coeffs], kern);
+        Prover::blind_coeffs_with_inv(&mut z_1_coeffs, 2, rng);
+        let z_1_poly = Polynomial::from_coefficients_vec(z_1_coeffs);
+
+        // let z_1_poly = Prover::blind_poly(
+        //     &z_1_coeffs,
+        //     2,
+        //     &domain,
+        //     rng,
+        // );
 
         // Commit to permutation polynomial
         let z_1_poly_commit = commit_key.commit(&z_1_poly)?;
@@ -363,20 +439,27 @@ impl Prover {
         transcript.append_commitment(b"z_1", &z_1_poly_commit);
 
         // Compute lookup permutation poly
-        let z_2_poly = Prover::blind_poly(
-            &self.cs.perm.compute_lookup_permutation_vec(
-                &domain,
-                &compressed_f_multiset.0,
-                &compressed_t_multiset.0,
-                &h_1.0,
-                &h_2.0,
-                &delta,
-                &epsilon,
-            ),
-            2,
+        let mut z_2_coeffs = self.cs.perm.compute_lookup_permutation_vec(
             &domain,
-            rng,
+            &compressed_f_multiset.0,
+            &compressed_t_multiset.0,
+            &h_1.0,
+            &h_2.0,
+            &delta,
+            &epsilon,
         );
+        let mut p_i_coeffs = pis.clone();
+        p_i_coeffs.resize(domain.size(), BlsScalar::zero());
+        domain.many_ifft(&mut [&mut z_2_coeffs, &mut p_i_coeffs], kern);
+        Prover::blind_coeffs_with_inv(&mut z_2_coeffs, 2, rng);
+        let z_2_poly = Polynomial::from_coefficients_vec(z_2_coeffs);
+        let pi_poly = Polynomial::from_coefficients_vec(p_i_coeffs);
+        // let z_2_poly = Prover::blind_poly(
+        //     &z_2_coeffs,
+        //     2,
+        //     &domain,
+        //     rng,
+        // );
 
         // Commit to permutation polynomial
         let z_2_poly_commit = commit_key.commit(&z_2_poly)?;
@@ -399,9 +482,9 @@ impl Prover {
             transcript.challenge_scalar(b"lookup challenge");
 
         // Compute public inputs polynomial
-        let pi_poly = Polynomial::from_coefficients_vec(
-            domain.ifft(&self.cs.to_dense_public_inputs()),
-        );
+        // let pi_poly = Polynomial::from_coefficients_vec(
+        //     domain.ifft(&self.cs.to_dense_public_inputs()),
+        // );
 
         // Compute quotient polynomial
         let q_poly = quotient_poly::compute(
@@ -428,6 +511,7 @@ impl Prover {
                 var_base_sep_challenge,
                 lookup_sep_challenge,
             ),
+            kern,
         )?;
 
         // Split quotient polynomial into 4 degree `n` polynomials
@@ -616,7 +700,9 @@ impl Prover {
         &mut self,
         commit_key: &CommitKey,
         rng: &mut R,
+        kern: &mut Option<LockedFFTKernel>
     ) -> Result<Proof, Error> {
+
         let prover_key: &ProverKey;
 
         if self.prover_key.is_none() {
@@ -624,6 +710,7 @@ impl Prover {
             let prover_key = self.cs.preprocess_prover(
                 commit_key,
                 &mut self.preprocessed_transcript,
+                kern,
             )?;
             // Store preprocessed circuit and transcript in the Prover
             self.prover_key = Some(prover_key);
@@ -632,7 +719,7 @@ impl Prover {
         prover_key = self.prover_key.as_ref().unwrap();
 
         let proof =
-            self.prove_with_preprocessed(commit_key, prover_key, rng)?;
+            self.prove_with_preprocessed(commit_key, prover_key, rng, kern)?;
 
         // Clear witness and reset composer variables
         self.clear_witness();
